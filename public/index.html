@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="tr" data-theme="dark" data-accent="blue">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>Muck</title>
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <meta name="theme-color" content="#0f1117" id="theme-color-meta" />
+  <link rel="icon" href="/icon.png" />
+  <link rel="apple-touch-icon" href="/icon.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Muck" />
+  <link rel="stylesheet" href="/style.css" />
+  <script>
+    (function () {
+      try {
+        document.documentElement.dataset.theme = localStorage.getItem('muck_theme') || localStorage.getItem('streamuck_theme') || 'dark';
+        document.documentElement.dataset.accent = localStorage.getItem('muck_accent') || localStorage.getItem('streamuck_accent') || 'blue';
+        if ((localStorage.getItem('muck_animations') || localStorage.getItem('streamuck_animations')) === 'off') document.documentElement.classList.add('no-anim');
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+  <div id="splash" class="splash"><img src="/icon.png" alt="" class="splash-icon" /></div>
+
+  <!-- Auth -->
+  <div id="auth-view" class="view hidden">
+    <div class="auth-bg" aria-hidden="true"><span class="orb orb-1"></span><span class="orb orb-2"></span><span class="orb orb-3"></span></div>
+    <div class="auth-box">
+      <img src="/icon.png" alt="Muck" class="auth-logo" />
+      <h1 class="brand">Muck</h1>
+      <p class="auth-tagline">Sunucular, kanallar ve sesli sohbet.</p>
+      <div class="tabs" id="auth-tabs">
+        <button class="tab active" data-tab="login">Giriş Yap</button>
+        <button class="tab" data-tab="register">Kayıt Ol</button>
+        <span class="tab-indicator"></span>
+      </div>
+      <form id="auth-form">
+        <input id="auth-username" type="text" placeholder="Kullanıcı adı" autocomplete="username" spellcheck="false" />
+        <input id="auth-password" type="password" placeholder="Şifre" autocomplete="current-password" />
+        <p id="auth-error" class="error hidden"></p>
+        <button type="submit" id="auth-submit" class="btn btn-primary">Giriş Yap</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Ana uygulama -->
+  <div id="app" class="app hidden">
+    <!-- Sunucu rayı (sadece simge) -->
+    <nav class="rail" aria-label="Sunucular">
+      <button class="rail-btn rail-home active" id="btn-home" title="Ana Sayfa" aria-label="Ana Sayfa">
+        <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M12 3.2 3 10.5V21a1 1 0 0 0 1 1h5v-6h6v6h5a1 1 0 0 0 1-1V10.5L12 3.2Z"/></svg>
+      </button>
+      <div class="rail-divider"></div>
+      <div id="rail-servers" class="rail-servers"></div>
+      <button class="rail-btn rail-add" id="btn-server-menu" title="Sunucu ekle" aria-label="Sunucu ekle">
+        <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6V5Z"/></svg>
+      </button>
+      <div class="rail-spacer"></div>
+      <button class="rail-btn rail-settings" id="btn-settings" title="Ayarlar" aria-label="Ayarlar">
+        <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="m19.14 12.94.94-.73a.5.5 0 0 0 .12-.64l-1.78-3.08a.5.5 0 0 0-.6-.22l-1.1.44a6.9 6.9 0 0 0-1.13-.65l-.17-1.18a.5.5 0 0 0-.5-.42h-3.56a.5.5 0 0 0-.5.42l-.17 1.18c-.4.16-.78.38-1.13.65l-1.1-.44a.5.5 0 0 0-.6.22L4.6 11.57a.5.5 0 0 0 .12.64l.94.73a5.7 5.7 0 0 0 0 1.32l-.94.73a.5.5 0 0 0-.12.64l1.78 3.08a.5.5 0 0 0 .6.22l1.1-.44c.35.27.73.49 1.13.65l.17 1.18a.5.5 0 0 0 .5.42h3.56a.5.5 0 0 0 .5-.42l.17-1.18c.4-.16.78-.38 1.13-.65l1.1.44a.5.5 0 0 0 .6-.22l1.78-3.08a.5.5 0 0 0-.12-.64l-.94-.73a5.7 5.7 0 0 0 0-1.32ZM12 15.5A3.5 3.5 0 1 1 15.5 12 3.5 3.5 0 0 1 12 15.5Z"/></svg>
+      </button>
+    </nav>
+
+    <!-- Kenar çubuğu -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-head" id="sidebar-head">
+        <span class="sidebar-title" id="sidebar-title">Ana Sayfa</span>
+        <button class="icon-btn icon-btn--sm" id="btn-add-friend" title="Arkadaş ekle" aria-label="Arkadaş ekle">
+          <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M15 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4Zm-6 0a3.5 3.5 0 1 0-3.5-3.5A3.5 3.5 0 0 0 9 12Zm0 2c-2.7 0-6 1.34-6 4v2h8v-2c0-1 .46-1.9 1.2-2.6A9.6 9.6 0 0 0 9 14Zm6 0c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4Z"/></svg>
+        </button>
+        <button class="icon-btn icon-btn--sm hidden" id="btn-server-settings" title="Sunucu ayarları" aria-label="Sunucu ayarları">
+          <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="m19.14 12.94.94-.73a.5.5 0 0 0 .12-.64l-1.78-3.08a.5.5 0 0 0-.6-.22l-1.1.44a6.9 6.9 0 0 0-1.13-.65l-.17-1.18a.5.5 0 0 0-.5-.42h-3.56a.5.5 0 0 0-.5.42l-.17 1.18c-.4.16-.78.38-1.13.65l-1.1-.44a.5.5 0 0 0-.6.22L4.6 11.57a.5.5 0 0 0 .12.64l.94.73a5.7 5.7 0 0 0 0 1.32l-.94.73a.5.5 0 0 0-.12.64l1.78 3.08a.5.5 0 0 0 .6.22l1.1-.44c.35.27.73.49 1.13.65l.17 1.18a.5.5 0 0 0 .5.42h3.56a.5.5 0 0 0 .5-.42l.17-1.18c.4-.16.78-.38 1.13-.65l1.1.44a.5.5 0 0 0 .6-.22l1.78-3.08a.5.5 0 0 0-.12-.64l-.94-.73a5.7 5.7 0 0 0 0-1.32ZM12 15.5A3.5 3.5 0 1 1 15.5 12 3.5 3.5 0 0 1 12 15.5Z"/></svg>
+        </button>
+      </div>
+      <div class="sidebar-body" id="sidebar-body">
+        <!-- Ana: arkadaşlar -->
+        <div id="sidebar-home">
+          <div class="sidebar-section-label">Arkadaşlar</div>
+          <ul id="friends-list" class="sidebar-list"></ul>
+          <p id="friends-empty" class="sidebar-empty">Henüz arkadaşın yok.</p>
+        </div>
+        <!-- Sunucu: kanallar -->
+        <div id="sidebar-server" class="hidden">
+          <div class="sidebar-section-label">Metin Kanalları</div>
+          <ul id="text-channels" class="sidebar-list"></ul>
+          <div class="sidebar-section-label">Ses Kanalları</div>
+          <ul id="voice-channels" class="sidebar-list"></ul>
+        </div>
+      </div>
+      <div class="sidebar-user">
+        <span class="user-avatar" id="user-avatar">?</span>
+        <span class="user-name" id="user-name">—</span>
+      </div>
+    </aside>
+
+    <!-- Ana içerik -->
+    <main class="main" id="main">
+      <!-- Boş durum -->
+      <div id="view-empty" class="main-empty">
+        <img src="/icon.png" alt="" class="main-empty-icon" />
+        <h2>Muck</h2>
+        <p id="empty-hint">Bir arkadaş seç veya sunucuya katıl.</p>
+      </div>
+
+      <!-- Metin sohbet -->
+      <div id="view-chat" class="main-view hidden">
+        <div class="chat-head"><span id="chat-title"># genel</span></div>
+        <div class="chat-messages" id="chat-messages"></div>
+        <form class="chat-input" id="chat-form">
+          <input id="chat-input" type="text" placeholder="Mesaj yaz…" autocomplete="off" maxlength="2000" />
+          <button type="submit" class="btn btn-primary btn-send" aria-label="Gönder">
+            <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M3.4 20.6 21 12 3.4 3.4l2.8 7.2L16 12l-9.8 1.4-2.8 7.2Z"/></svg>
+          </button>
+        </form>
+      </div>
+
+      <!-- DM sohbet -->
+      <div id="view-dm" class="main-view hidden">
+        <div class="chat-head"><span id="dm-title">@ kullanıcı</span></div>
+        <div class="chat-messages" id="dm-messages"></div>
+        <form class="chat-input" id="dm-form">
+          <input id="dm-input" type="text" placeholder="Mesaj yaz…" autocomplete="off" maxlength="2000" />
+          <button type="submit" class="btn btn-primary btn-send" aria-label="Gönder">
+            <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M3.4 20.6 21 12 3.4 3.4l2.8 7.2L16 12l-9.8 1.4-2.8 7.2Z"/></svg>
+          </button>
+        </form>
+      </div>
+
+      <!-- Ses kanalı -->
+      <div id="view-voice" class="main-view hidden">
+        <div class="voice-head">
+          <span id="voice-title">Sesli</span>
+          <span class="voice-count" id="voice-count">0 katılımcı</span>
+        </div>
+        <div class="voice-grid" id="voice-grid"></div>
+        <div class="voice-controls">
+          <button class="vc-btn" id="vc-mic" title="Mikrofon" aria-label="Mikrofon">
+            <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Zm5-3a1 1 0 1 0-2 0 5 5 0 0 1-10 0 1 1 0 1 0-2 0 7 7 0 0 0 6 6.92V20H9a1 1 0 1 0 0 2h6a1 1 0 1 0 0-2h-3v-2.08A7 7 0 0 0 17 11Z"/></svg>
+          </button>
+          <button class="vc-btn" id="vc-cam" title="Kamera" aria-label="Kamera">
+            <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M4 6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h10l4 3V5L14 8H4Zm14.5 1.5 2.5-2v11l-2.5-2V7.5Z"/></svg>
+          </button>
+          <button class="vc-btn" id="vc-screen" title="Ekran paylaş" aria-label="Ekran paylaş">
+            <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M4 5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h7v2H8v2h8v-2h-3v-2h7a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2H4Zm6 3.5 5 3.5-5 3.5v-7Z"/></svg>
+          </button>
+          <button class="vc-btn vc-btn--danger" id="vc-leave" title="Ayrıl" aria-label="Ayrıl">
+            <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M12 9c-1.6 0-3 .5-4.2 1.4l-1.4-1.4A8 8 0 0 1 12 7a8 8 0 0 1 5.6 2.2l-1.4 1.4A5.9 5.9 0 0 0 12 9Zm0 4c-.8 0-1.5.2-2.1.6l-1.4-1.4A4 4 0 0 1 12 11a4 4 0 0 1 2.1.6l-1.4 1.4c-.6-.4-1.3-.6-2.1-.6Zm7.7 2.3-1.4 1.4A8 8 0 0 1 12 17a8 8 0 0 1-6.3-3.1l-1.4 1.4A10 10 0 0 0 12 19a10 10 0 0 0 7.7-3.7ZM3 12h2a7 7 0 0 1 7-7V3a9 9 0 0 0-9 9Zm16 0h2a9 9 0 0 0-9-9v2a7 7 0 0 1 7 7Z"/></svg>
+          </button>
+        </div>
+      </div>
+
+    </main>
+
+    <!-- Sağ panel: üyeler / DM profili -->
+    <aside class="panel" id="right-panel">
+      <!-- Sunucu üyeleri -->
+      <div id="panel-members" class="hidden">
+        <div class="panel-head">Üyeler — <span id="member-count">0</span></div>
+        <ul id="member-list" class="panel-list"></ul>
+      </div>
+      <!-- DM profili -->
+      <div id="panel-profile" class="hidden">
+        <div class="profile-banner"></div>
+        <div class="profile-body">
+          <span class="profile-avatar" id="profile-avatar">?</span>
+          <div class="profile-name" id="profile-name">—</div>
+          <div class="profile-status" id="profile-status"><span class="status-dot"></span><span id="profile-status-text">Çevrimdışı</span></div>
+          <div class="profile-card">
+            <div class="profile-card-label">Muck Üyesi</div>
+            <div class="profile-card-value" id="profile-username">—</div>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Mobil dokunma katmanı (drawer'ları kapatmak için) -->
+    <div class="scrim" id="scrim"></div>
+  </div>
+
+  <!-- Modaller -->
+  <div id="modal-overlay" class="modal hidden">
+    <div class="modal-box" id="modal-box">
+      <h3 id="modal-title">Başlık</h3>
+      <div id="modal-body"></div>
+      <div class="modal-actions" id="modal-actions"></div>
+    </div>
+  </div>
+
+  <!-- Ayarlar popup -->
+  <div id="settings-overlay" class="modal hidden">
+    <div class="modal-box settings-modal" id="settings-box">
+      <div class="settings-modal-head">
+        <h3>Ayarlar</h3>
+        <button class="icon-btn icon-btn--sm" id="btn-settings-close" aria-label="Kapat">
+          <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M18.3 5.7 12 12l6.3 6.3-1.4 1.4L10.6 13.4 4.3 19.7 2.9 18.3 9.2 12 2.9 5.7l1.4-1.4L10.6 10.6 16.9 4.3l1.4 1.4Z"/></svg>
+        </button>
+      </div>
+      <div class="settings-scroll">
+        <div class="settings-group">
+          <div class="settings-group-title">Görünüm</div>
+          <div class="setting-row setting-col">
+            <div class="setting-label"><span class="setting-name">Tema</span></div>
+            <div class="theme-grid" id="theme-grid">
+              <button class="theme-swatch" data-theme-value="dark"><span class="sw sw-dark"></span><span class="theme-name">Koyu</span></button>
+              <button class="theme-swatch" data-theme-value="black"><span class="sw sw-black"></span><span class="theme-name">Siyah</span></button>
+              <button class="theme-swatch" data-theme-value="light"><span class="sw sw-light"></span><span class="theme-name">Açık</span></button>
+            </div>
+          </div>
+          <div class="setting-row setting-col">
+            <div class="setting-label"><span class="setting-name">Vurgu Rengi</span></div>
+            <div class="accent-grid" id="accent-grid">
+              <button class="accent-dot" data-accent-value="blue" style="--dot:#5b8def"></button>
+              <button class="accent-dot" data-accent-value="violet" style="--dot:#8b5cf6"></button>
+              <button class="accent-dot" data-accent-value="emerald" style="--dot:#10b981"></button>
+              <button class="accent-dot" data-accent-value="rose" style="--dot:#f43f5e"></button>
+              <button class="accent-dot" data-accent-value="amber" style="--dot:#f59e0b"></button>
+              <button class="accent-dot" data-accent-value="cyan" style="--dot:#06b6d4"></button>
+            </div>
+          </div>
+        </div>
+        <div class="settings-group">
+          <div class="settings-group-title">Deneyim</div>
+          <label class="setting-row" for="toggle-animations">
+            <div class="setting-label"><span class="setting-name">Animasyonlar</span></div>
+            <span class="switch"><input type="checkbox" id="toggle-animations" checked /><span class="switch-track"><span class="switch-thumb"></span></span></span>
+          </label>
+        </div>
+        <div class="settings-group">
+          <div class="settings-group-title">Hesap</div>
+          <div class="setting-row"><div class="setting-label"><span class="setting-name">Kullanıcı</span><span class="setting-desc" id="settings-username">—</span></div></div>
+          <button id="btn-logout" class="btn btn-danger btn-block">Çıkış Yap</button>
+        </div>
+        <p class="app-version">Muck · sürüm 3.0</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/voice.js" type="module"></script>
+  <script src="/app.js" type="module"></script>
+</body>
+</html>
