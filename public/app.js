@@ -698,6 +698,64 @@ function renderVoiceGrid(state) {
   for (const t of tiles) grid.appendChild(makeVoiceTile(t));
 }
 
+function showVoiceFooter(channelName) {
+  $('voice-conn').classList.remove('hidden');
+  $('voice-conn-channel').textContent = channelName || '—';
+  $('voice-conn-title').textContent = 'Ses Bağlantısı Kuruldu';
+  startPingMonitor();
+}
+
+function hideVoiceFooter() {
+  $('voice-conn').classList.add('hidden');
+  stopPingMonitor();
+  const ping = $('voice-ping');
+  ping.textContent = '—';
+  ping.className = 'voice-ping';
+  $('vc-mic').classList.remove('off');
+  $('vc-deafen').classList.remove('off');
+  $('vc-cam').classList.remove('on');
+  $('vc-screen').classList.remove('on');
+}
+
+let pingTimer = null;
+function updatePingUi(ms) {
+  const el = $('voice-ping');
+  if (!el || $('voice-conn').classList.contains('hidden')) return;
+  el.textContent = `${ms} ms`;
+  el.className = 'voice-ping' + (ms > 200 ? ' bad' : ms > 100 ? ' mid' : '');
+  el.title = `Gecikme: ${ms} ms`;
+}
+
+function startPingMonitor() {
+  stopPingMonitor();
+  const tick = () => {
+    if (!socket?.connected) return;
+    const t0 = performance.now();
+    socket.emit('latency-ping', Date.now(), () => {
+      updatePingUi(Math.max(1, Math.round(performance.now() - t0)));
+    });
+  };
+  tick();
+  pingTimer = setInterval(tick, 4000);
+}
+
+function stopPingMonitor() {
+  if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
+}
+
+function leaveVoiceChannel() {
+  voiceManager?.leave();
+  voiceManager = null;
+  maximizedTile = null;
+  lastVoiceState = null;
+  lastSpeakingFlags = {};
+  hideVoiceFooter();
+  setMainView('empty');
+  $('empty-hint').textContent = 'Bir kanal seç.';
+  renderChannels();
+  if (activeServer) navTo(`/channels/${activeServer.id}`);
+}
+
 function joinVoiceChannel(channelId, name, push = true) {
   if (voiceManager) voiceManager.leave();
   activeChannelId = null;
@@ -721,31 +779,37 @@ function joinVoiceChannel(channelId, name, push = true) {
   });
 
   $('voice-title').textContent = `🔊 ${name}`;
+  showVoiceFooter(name);
   setMainView('voice');
   renderChannels();
 
   socket.emit('join-voice', { channelId }, async (res) => {
-    if (res.error) { toast(res.error); setMainView('empty'); return; }
+    if (res.error) {
+      toast(res.error);
+      voiceManager = null;
+      hideVoiceFooter();
+      setMainView('empty');
+      return;
+    }
     await voiceManager.join(channelId, res.participants);
   });
   if (push && activeServer) navTo(`/channels/${activeServer.id}/${channelId}`);
   closeDrawers();
 }
 
-$('vc-mic').addEventListener('click', () => voiceManager?.toggleMic());
-$('vc-deafen').addEventListener('click', () => voiceManager?.toggleDeafen());
+$('vc-mic').addEventListener('click', () => {
+  if (!voiceManager) { toast('Önce bir ses kanalına gir.'); return; }
+  voiceManager.toggleMic();
+});
+$('vc-deafen').addEventListener('click', () => {
+  if (!voiceManager) { toast('Önce bir ses kanalına gir.'); return; }
+  voiceManager.toggleDeafen();
+});
 $('vc-cam').addEventListener('click', () => voiceManager?.toggleCamera());
 $('vc-screen').addEventListener('click', () => voiceManager?.toggleScreen());
-$('vc-leave').addEventListener('click', () => {
-  voiceManager?.leave();
-  voiceManager = null;
-  maximizedTile = null;
-  lastVoiceState = null;
-  setMainView('empty');
-  $('empty-hint').textContent = 'Bir kanal seç.';
-  renderChannels();
-  if (activeServer) navTo(`/channels/${activeServer.id}`);
-});
+$('vc-leave').addEventListener('click', () => leaveVoiceChannel());
+$('btn-user-settings').addEventListener('click', openSettings);
+$('user-panel-info').addEventListener('click', openSettings);
 
 /* ================= Server modals ================= */
 $('btn-server-menu').addEventListener('click', () => {
@@ -943,6 +1007,8 @@ function connectSocket(token) {
     servers = srv;
     $('user-name').textContent = user.username;
     $('user-avatar').textContent = initials(user.username);
+    $('user-status-text').textContent = 'Çevrimiçi';
+    $('user-status-dot').classList.add('on');
     $('settings-username').textContent = user.username;
     renderRail();
     renderFriends();

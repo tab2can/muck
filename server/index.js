@@ -408,6 +408,11 @@ io.on('connection', (socket) => {
     leaveVoice(socket);
   });
 
+  // İstemci gecikme ölçümü (ping göstergesi)
+  socket.on('latency-ping', (sentAt, cb) => {
+    if (typeof cb === 'function') cb({ sentAt, serverAt: Date.now() });
+  });
+
   socket.on('voice-state', ({ muted, deafened, camera, screen, camId, screenId }) => {
     const channelId = socket.data.voiceChannelId;
     if (!channelId) return;
