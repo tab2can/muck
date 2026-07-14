@@ -39,7 +39,7 @@ async function loadIceServers() {
 // "perfect negotiation" kullanır. Kamera ve ekran ayrı MediaStream'ler (msid)
 // ile gönderilir; stream id'leri voice-state ile paylaşılır, böylece karşı
 // taraf hangi video'nun kamera hangisinin ekran olduğunu ayırt eder.
-export function createVoiceManager({ socket, username, onUpdate }) {
+export function createVoiceManager({ socket, username, onUpdate, onSpeaking }) {
   let channelId = null;
 
   // Yerel akışlar (her biri ayrı msid taşır)
@@ -60,6 +60,102 @@ export function createVoiceManager({ socket, username, onUpdate }) {
   const remoteAudio = new Map(); // socketId -> MediaStream (ses oynatma)
   const remoteVideoById = new Map(); // socketId -> Map(streamId -> MediaStream)
   const participants = new Map(); // socketId -> { userId, username, muted, camera, screen, camId, screenId }
+
+  // Konuşma algılama (VAD) — yeşil halka için
+  let audioCtx = null;
+  const analysers = new Map(); // key -> { analyser, source, data }
+  const speakingNow = new Map(); // key -> bool
+  const lastLoudAt = new Map(); // key -> timestamp
+  let vadRaf = 0;
+  const SPEAK_THRESHOLD = 0.025;
+  const SPEAK_HOLD_MS = 280;
+
+  function ensureAudioCtx() {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+    return audioCtx;
+  }
+
+  function emitSpeaking() {
+    if (!onSpeaking) return;
+    const flags = {};
+    for (const [k, v] of speakingNow) flags[k] = v;
+    onSpeaking(flags);
+  }
+
+  function setSpeaking(key, on) {
+    if (speakingNow.get(key) === on) return;
+    speakingNow.set(key, on);
+    emitSpeaking();
+  }
+
+  function attachAnalyser(key, stream) {
+    detachAnalyser(key);
+    if (!stream?.getAudioTracks?.().length) return;
+    try {
+      const ctx = ensureAudioCtx();
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 512;
+      analyser.smoothingTimeConstant = 0.55;
+      source.connect(analyser);
+      analysers.set(key, { analyser, source, data: new Uint8Array(analyser.fftSize) });
+      startVadLoop();
+    } catch (e) {
+      console.warn('Analyser bağlanamadı:', e.message);
+    }
+  }
+
+  function detachAnalyser(key) {
+    const a = analysers.get(key);
+    if (a) {
+      try { a.source.disconnect(); } catch {}
+      analysers.delete(key);
+    }
+    const was = speakingNow.get(key);
+    speakingNow.delete(key);
+    lastLoudAt.delete(key);
+    if (was) emitSpeaking();
+  }
+
+  function rmsLevel(analyser, data) {
+    analyser.getByteTimeDomainData(data);
+    let sum = 0;
+    for (let i = 0; i < data.length; i++) {
+      const v = (data[i] - 128) / 128;
+      sum += v * v;
+    }
+    return Math.sqrt(sum / data.length);
+  }
+
+  function startVadLoop() {
+    if (vadRaf) return;
+    const tick = () => {
+      vadRaf = 0;
+      if (!analysers.size) return;
+      const now = performance.now();
+      for (const [key, { analyser, data }] of analysers) {
+        // Kendi mikimiz kapalıysa konuşuyor sayma
+        if (key === 'self' && (muted || !audioTrack || !audioTrack.enabled)) {
+          setSpeaking('self', false);
+          continue;
+        }
+        const level = rmsLevel(analyser, data);
+        if (level >= SPEAK_THRESHOLD) lastLoudAt.set(key, now);
+        const recent = (lastLoudAt.get(key) || 0) + SPEAK_HOLD_MS > now;
+        setSpeaking(key, recent);
+      }
+      vadRaf = requestAnimationFrame(tick);
+    };
+    vadRaf = requestAnimationFrame(tick);
+  }
+
+  function stopVad() {
+    if (vadRaf) { cancelAnimationFrame(vadRaf); vadRaf = 0; }
+    for (const key of [...analysers.keys()]) detachAnalyser(key);
+    speakingNow.clear();
+    emitSpeaking();
+  }
 
   function applyDeafened() {
     for (const el of audioEls.values()) {
@@ -83,9 +179,11 @@ export function createVoiceManager({ socket, username, onUpdate }) {
     el.volume = deafened ? 0 : 1;
     const p = el.play();
     if (p && p.catch) p.catch(() => {});
+    attachAnalyser(socketId, stream);
   }
 
   function removeAudioEl(socketId) {
+    detachAnalyser(socketId);
     const el = audioEls.get(socketId);
     if (el) { try { el.srcObject = null; el.remove(); } catch {} }
     audioEls.delete(socketId);
@@ -142,7 +240,7 @@ export function createVoiceManager({ socket, username, onUpdate }) {
 
   function broadcastState() {
     socket.emit('voice-state', {
-      muted, camera: cameraOn, screen: screenOn,
+      muted, deafened, camera: cameraOn, screen: screenOn,
       camId: camStream?.id || null,
       screenId: screenStream?.id || null,
     });
@@ -153,7 +251,10 @@ export function createVoiceManager({ socket, username, onUpdate }) {
     try {
       const s = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
       audioTrack = s.getAudioTracks()[0];
-      if (audioTrack) micStream.addTrack(audioTrack);
+      if (audioTrack) {
+        micStream.addTrack(audioTrack);
+        attachAnalyser('self', micStream);
+      }
     } catch (e) {
       audioTrack = null;
       console.warn('Mikrofon alınamadı, dinleme modunda:', e.message);
@@ -252,7 +353,10 @@ export function createVoiceManager({ socket, username, onUpdate }) {
 
   async function onDescription(socketId, userId, uname, description) {
     if (!participants.has(socketId)) {
-      participants.set(socketId, { userId, username: uname, muted: false, camera: false, screen: false, camId: null, screenId: null });
+      participants.set(socketId, {
+        userId, username: uname, muted: false, deafened: false,
+        camera: false, screen: false, camId: null, screenId: null,
+      });
     }
     await loadIceServers();
     let st = peers.get(socketId);
@@ -314,7 +418,8 @@ export function createVoiceManager({ socket, username, onUpdate }) {
       for (const p of existing) {
         participants.set(p.socketId, {
           userId: p.userId, username: p.username,
-          muted: !!p.muted, camera: !!p.camera, screen: !!p.screen,
+          muted: !!p.muted, deafened: !!p.deafened,
+          camera: !!p.camera, screen: !!p.screen,
           camId: p.camId || null, screenId: p.screenId || null,
         });
         createPeer(p.socketId, false);
@@ -324,7 +429,10 @@ export function createVoiceManager({ socket, username, onUpdate }) {
 
     onPeerJoined(socketId, userId, uname) {
       if (!participants.has(socketId)) {
-        participants.set(socketId, { userId, username: uname, muted: false, camera: false, screen: false, camId: null, screenId: null });
+        participants.set(socketId, {
+          userId, username: uname, muted: false, deafened: false,
+          camera: false, screen: false, camId: null, screenId: null,
+        });
       }
       emit();
     },
@@ -336,7 +444,9 @@ export function createVoiceManager({ socket, username, onUpdate }) {
         if (p.socketId === socket.id) continue;
         const cur = participants.get(p.socketId);
         if (cur) {
-          cur.muted = p.muted; cur.camera = p.camera; cur.screen = p.screen;
+          cur.muted = p.muted;
+          cur.deafened = !!p.deafened;
+          cur.camera = p.camera; cur.screen = p.screen;
           cur.camId = p.camId || null; cur.screenId = p.screenId || null;
         }
       }
@@ -348,6 +458,7 @@ export function createVoiceManager({ socket, username, onUpdate }) {
     toggleMic() {
       muted = !muted;
       if (audioTrack) audioTrack.enabled = !muted;
+      if (muted) setSpeaking('self', false);
       broadcastState();
       emit();
     },
@@ -355,6 +466,7 @@ export function createVoiceManager({ socket, username, onUpdate }) {
     toggleDeafen() {
       deafened = !deafened;
       applyDeafened();
+      broadcastState();
       emit();
     },
 
@@ -395,6 +507,7 @@ export function createVoiceManager({ socket, username, onUpdate }) {
     },
 
     leave() {
+      stopVad();
       for (const sid of [...peers.keys()]) removePeer(sid);
       for (const sid of [...audioEls.keys()]) removeAudioEl(sid);
       [audioTrack, cameraTrack, screenTrack].forEach((t) => { try { t?.stop(); } catch {} });

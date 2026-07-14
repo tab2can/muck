@@ -271,21 +271,64 @@ function renderChannels() {
     voiceList.appendChild(li);
 
     const presence = voicePresence[ch.id] || [];
-    // Aynı kullanıcı birden fazla cihazdan bağlıysa tek kez göster.
-    const seen = new Set();
-    const uniquePresence = presence.filter((p) => (seen.has(p.userId) ? false : seen.add(p.userId)));
-    if (uniquePresence.length) {
+    // Aynı kullanıcı birden fazla cihazdan: tek satır, ikonları birleştir.
+    const byUser = new Map();
+    for (const p of presence) {
+      const cur = byUser.get(p.userId);
+      if (!cur) {
+        byUser.set(p.userId, {
+          userId: p.userId,
+          username: p.username,
+          muted: !!p.muted,
+          deafened: !!p.deafened,
+          camera: !!p.camera,
+          screen: !!p.screen,
+        });
+      } else {
+        cur.muted = cur.muted && !!p.muted;
+        cur.deafened = cur.deafened || !!p.deafened;
+        cur.camera = cur.camera || !!p.camera;
+        cur.screen = cur.screen || !!p.screen;
+      }
+    }
+    if (byUser.size) {
       const ul = document.createElement('ul');
       ul.className = 'voice-users';
-      for (const p of uniquePresence) {
-        const vu = document.createElement('li');
-        vu.className = 'voice-user';
-        vu.innerHTML = `<span class="status-dot on"></span>${escapeHtml(p.username)}${p.muted ? ' 🔇' : ''}`;
-        ul.appendChild(vu);
+      for (const p of byUser.values()) {
+        ul.appendChild(makeVoiceUserRow(p));
       }
       li.appendChild(ul);
     }
   }
+}
+
+const VU_ICONS = {
+  cam: '<svg class="vu-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h10l4 3V5L14 8H4Z"/></svg>',
+  screen: '<svg class="vu-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h7v2H8v2h8v-2h-3v-2h7a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2H4Z"/></svg>',
+  mic: '<svg class="vu-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V20H9v2h6v-2h-2v-2.08A7 7 0 0 0 19 11h-2Z"/></svg>',
+  micOff: '<svg class="vu-icon off" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M19.1 18.3 4.7 3.9 3.3 5.3l5.2 5.2V11a3.5 3.5 0 0 0 4.9 3.2l1.5 1.5A5.5 5.5 0 0 1 7 11H5a7.5 7.5 0 0 0 6 7.4V21H9v2h6v-2h-2v-2.6c1.1-.2 2.1-.7 3-1.3l3.5 3.5 1.6-1.6ZM12 3a3 3 0 0 0-3 3v.2l8.4 8.4A5 5 0 0 0 17 11h2a7 7 0 0 1-.7 3L14 9.7V6a3 3 0 0 0-2-3Z"/></svg>',
+  headphone: '<svg class="vu-icon" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 3a9 9 0 0 0-9 9v4a3 3 0 0 0 3 3h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H5.07A7 7 0 0 1 12 5a7 7 0 0 1 6.93 6H17a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h1a3 3 0 0 0 3-3v-4a9 9 0 0 0-9-9Z"/></svg>',
+  headphoneOff: '<svg class="vu-icon off" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="m3.3 2 18 18-1.4 1.4-3.2-3.2A3 3 0 0 1 18 21h-1a2 2 0 0 1-2-2v-3c0-.3.1-.6.2-.8L3.3 3.4 4.7 2Zm8.7 1a9 9 0 0 1 9 9v4c0 .5-.1 1-.3 1.4l-1.5-1.5.01-.2a1 1 0 0 0-1-1h-1.9A7 7 0 0 0 12 5a7 7 0 0 0-6.7 5H7a2 2 0 0 1 1.8 1.1L7.2 9.5A9 9 0 0 1 12 3ZM5.07 13H7a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H6a3 3 0 0 1-3-3v-4c0-.34.03-.67.07-1Z"/></svg>',
+};
+
+function makeVoiceUserRow(p) {
+  const vu = document.createElement('li');
+  vu.className = 'voice-user';
+  const media = [];
+  if (p.camera) media.push(VU_ICONS.cam);
+  if (p.screen) media.push(VU_ICONS.screen);
+  const audio = [
+    p.muted ? VU_ICONS.micOff : VU_ICONS.mic,
+    p.deafened ? VU_ICONS.headphoneOff : VU_ICONS.headphone,
+  ];
+  vu.innerHTML = `
+    <span class="status-dot on"></span>
+    <span class="voice-user-main">
+      <span class="voice-user-name">${escapeHtml(p.username)}</span>
+      <span class="voice-user-media">${media.join('')}</span>
+    </span>
+    <span class="voice-user-audio">${audio.join('')}</span>`;
+  return vu;
 }
 
 /* ================= Navigation ================= */
@@ -520,9 +563,25 @@ function buildVoiceTiles(state) {
   return tiles;
 }
 
+let lastSpeakingFlags = {};
+function applySpeakingUi(flags) {
+  const grid = $('voice-grid');
+  if (!grid) return;
+  for (const tile of grid.querySelectorAll('.voice-tile')) {
+    if (tile.classList.contains('voice-tile--screen')) {
+      tile.classList.remove('speaking');
+      continue;
+    }
+    tile.classList.toggle('speaking', !!flags[tile.dataset.key]);
+  }
+}
+
 function makeVoiceTile(t) {
   const tile = document.createElement('div');
-  tile.className = 'voice-tile' + (t.isScreen ? ' voice-tile--screen' : '');
+  const speaking = !t.isScreen && !!lastSpeakingFlags[t.key];
+  tile.className = 'voice-tile'
+    + (t.isScreen ? ' voice-tile--screen' : '')
+    + (speaking ? ' speaking' : '');
   tile.dataset.key = t.key;
 
   if (t.stream && t.stream.getVideoTracks().length) {
@@ -654,6 +713,10 @@ function joinVoiceChannel(channelId, name, push = true) {
       $('vc-deafen').classList.toggle('off', voiceManager.isDeafened());
       $('vc-cam').classList.toggle('on', voiceManager.isCameraOn());
       $('vc-screen').classList.toggle('on', voiceManager.isScreenOn());
+    },
+    onSpeaking: (flags) => {
+      lastSpeakingFlags = flags || {};
+      applySpeakingUi(lastSpeakingFlags);
     },
   });
 

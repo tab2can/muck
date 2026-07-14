@@ -143,7 +143,7 @@ function getVoiceList(channelId) {
   if (!map) return [];
   return [...map.entries()].map(([sid, v]) => ({
     socketId: sid, userId: v.userId, username: v.username,
-    muted: v.muted, camera: v.camera, screen: v.screen,
+    muted: !!v.muted, deafened: !!v.deafened, camera: !!v.camera, screen: !!v.screen,
     camId: v.camId || null, screenId: v.screenId || null,
   }));
 }
@@ -383,14 +383,17 @@ io.on('connection', (socket) => {
     const map = voiceParticipants.get(channelId);
     const existing = [...map.entries()].filter(([sid]) => sid !== socket.id);
 
-    map.set(socket.id, { userId, username: socket.data.username, muted: false, camera: false, screen: false, camId: null, screenId: null });
+    map.set(socket.id, {
+      userId, username: socket.data.username,
+      muted: false, deafened: false, camera: false, screen: false, camId: null, screenId: null,
+    });
     socket.join(`voice:${channelId}`);
     socket.data.voiceChannelId = channelId;
 
     cb?.({
       participants: existing.map(([sid, v]) => ({
         socketId: sid, userId: v.userId, username: v.username,
-        muted: v.muted, camera: v.camera, screen: v.screen,
+        muted: !!v.muted, deafened: !!v.deafened, camera: !!v.camera, screen: !!v.screen,
         camId: v.camId || null, screenId: v.screenId || null,
       })),
     });
@@ -405,13 +408,14 @@ io.on('connection', (socket) => {
     leaveVoice(socket);
   });
 
-  socket.on('voice-state', ({ muted, camera, screen, camId, screenId }) => {
+  socket.on('voice-state', ({ muted, deafened, camera, screen, camId, screenId }) => {
     const channelId = socket.data.voiceChannelId;
     if (!channelId) return;
     const map = voiceParticipants.get(channelId);
     const entry = map?.get(socket.id);
     if (!entry) return;
     if (muted !== undefined) entry.muted = muted;
+    if (deafened !== undefined) entry.deafened = deafened;
     if (camera !== undefined) entry.camera = camera;
     if (screen !== undefined) entry.screen = screen;
     if (camId !== undefined) entry.camId = camId;
