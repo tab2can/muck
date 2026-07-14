@@ -50,6 +50,7 @@ export function createVoiceManager({ socket, username, onUpdate }) {
   let screenStream = null; // MediaStream([screenTrack])
   let audioTrack = null;
   let muted = false;
+  let deafened = false; // kulaklık kapalı: uzak sesleri duyma
   let cameraOn = false;
   let screenOn = false;
 
@@ -60,19 +61,26 @@ export function createVoiceManager({ socket, username, onUpdate }) {
   const remoteVideoById = new Map(); // socketId -> Map(streamId -> MediaStream)
   const participants = new Map(); // socketId -> { userId, username, muted, camera, screen, camId, screenId }
 
+  function applyDeafened() {
+    for (const el of audioEls.values()) {
+      el.muted = deafened;
+      el.volume = deafened ? 0 : 1;
+    }
+  }
+
   function ensureAudioEl(socketId, stream) {
     let el = audioEls.get(socketId);
     if (!el) {
       el = document.createElement('audio');
       el.autoplay = true;
       el.playsInline = true;
-      el.muted = false;
-      el.volume = 1;
       el.style.display = 'none';
       document.body.appendChild(el);
       audioEls.set(socketId, el);
     }
     if (el.srcObject !== stream) el.srcObject = stream;
+    el.muted = deafened;
+    el.volume = deafened ? 0 : 1;
     const p = el.play();
     if (p && p.catch) p.catch(() => {});
   }
@@ -124,7 +132,7 @@ export function createVoiceManager({ socket, username, onUpdate }) {
     }));
     onUpdate({
       local: {
-        muted, cameraOn, screenOn,
+        muted, deafened, cameraOn, screenOn,
         cameraStream: cameraOn ? camStream : null,
         screenStream: screenOn ? screenStream : null,
       },
@@ -292,6 +300,7 @@ export function createVoiceManager({ socket, username, onUpdate }) {
   return {
     getChannelId: () => channelId,
     isMuted: () => muted,
+    isDeafened: () => deafened,
     isCameraOn: () => cameraOn,
     isScreenOn: () => screenOn,
     getCameraStream: () => camStream,
@@ -299,7 +308,7 @@ export function createVoiceManager({ socket, username, onUpdate }) {
 
     async join(chId, existing) {
       channelId = chId;
-      muted = false; cameraOn = false; screenOn = false;
+      muted = false; deafened = false; cameraOn = false; screenOn = false;
       await loadIceServers();
       await ensureMic();
       for (const p of existing) {
@@ -340,6 +349,12 @@ export function createVoiceManager({ socket, username, onUpdate }) {
       muted = !muted;
       if (audioTrack) audioTrack.enabled = !muted;
       broadcastState();
+      emit();
+    },
+
+    toggleDeafen() {
+      deafened = !deafened;
+      applyDeafened();
       emit();
     },
 
@@ -386,7 +401,7 @@ export function createVoiceManager({ socket, username, onUpdate }) {
       micStream.getTracks().forEach((t) => { try { micStream.removeTrack(t); } catch {} });
       audioTrack = cameraTrack = screenTrack = null;
       camStream = screenStream = null;
-      cameraOn = screenOn = false; muted = false;
+      cameraOn = screenOn = false; muted = false; deafened = false;
       channelId = null;
       socket.emit('leave-voice');
     },

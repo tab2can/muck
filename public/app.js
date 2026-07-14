@@ -651,6 +651,7 @@ function joinVoiceChannel(channelId, name, push = true) {
       renderVoiceGrid(state);
       $('voice-count').textContent = `${(state.remote?.length || 0) + 1} katılımcı`;
       $('vc-mic').classList.toggle('off', voiceManager.isMuted());
+      $('vc-deafen').classList.toggle('off', voiceManager.isDeafened());
       $('vc-cam').classList.toggle('on', voiceManager.isCameraOn());
       $('vc-screen').classList.toggle('on', voiceManager.isScreenOn());
     },
@@ -669,6 +670,7 @@ function joinVoiceChannel(channelId, name, push = true) {
 }
 
 $('vc-mic').addEventListener('click', () => voiceManager?.toggleMic());
+$('vc-deafen').addEventListener('click', () => voiceManager?.toggleDeafen());
 $('vc-cam').addEventListener('click', () => voiceManager?.toggleCamera());
 $('vc-screen').addEventListener('click', () => voiceManager?.toggleScreen());
 $('vc-leave').addEventListener('click', () => {
