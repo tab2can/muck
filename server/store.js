@@ -210,6 +210,12 @@ export function acceptFriendRequest(userId, requestId) {
 
   if (!user.friends.includes(other.id)) user.friends.push(other.id);
   if (!other.friends.includes(user.id)) other.friends.push(user.id);
+  const now = Date.now();
+  ensureSocial(user).friendSince[other.id] = now;
+  ensureSocial(other).friendSince[user.id] = now;
+  // Kapalı DM listesindeyse yeniden göster
+  ensureSocial(user).closedDms = ensureSocial(user).closedDms.filter((id) => id !== other.id);
+  ensureSocial(other).closedDms = ensureSocial(other).closedDms.filter((id) => id !== user.id);
   delete data.friendRequests[requestId];
   // İkisinin diğer yönlü bekleyen isteklerini de temizle
   for (const [id, r] of Object.entries(data.friendRequests)) {
@@ -243,10 +249,193 @@ export function declineFriendRequest(userId, requestId) {
 export function removeFriend(userId, friendId) {
   const user = findById(userId);
   const friend = findById(friendId);
-  if (user) user.friends = user.friends.filter((f) => f !== friendId);
-  if (friend) friend.friends = friend.friends.filter((f) => f !== userId);
+  if (user) {
+    user.friends = user.friends.filter((f) => f !== friendId);
+    const s = ensureSocial(user);
+    delete s.friendSince[friendId];
+    s.pinnedDms = s.pinnedDms.filter((id) => id !== friendId);
+    s.closedDms = s.closedDms.filter((id) => id !== friendId);
+    delete s.mutedDms[friendId];
+    delete s.unreadDms[friendId];
+    delete s.notes[friendId];
+  }
+  if (friend) {
+    friend.friends = friend.friends.filter((f) => f !== userId);
+    const s = ensureSocial(friend);
+    delete s.friendSince[userId];
+    s.pinnedDms = s.pinnedDms.filter((id) => id !== userId);
+    delete s.mutedDms[userId];
+    delete s.unreadDms[userId];
+    delete s.notes[userId];
+  }
   save();
   return { success: true };
+}
+
+function ensureSocial(user) {
+  if (!user.social) user.social = {};
+  const s = user.social;
+  if (!Array.isArray(s.pinnedDms)) s.pinnedDms = [];
+  if (!Array.isArray(s.closedDms)) s.closedDms = [];
+  if (!s.mutedDms || typeof s.mutedDms !== 'object') s.mutedDms = {};
+  if (!Array.isArray(s.ignored)) s.ignored = [];
+  if (!Array.isArray(s.blocked)) s.blocked = [];
+  if (!s.unreadDms || typeof s.unreadDms !== 'object') s.unreadDms = {};
+  if (!s.friendSince || typeof s.friendSince !== 'object') s.friendSince = {};
+  if (!s.notes || typeof s.notes !== 'object') s.notes = {};
+  return s;
+}
+
+export function getSocial(userId) {
+  const user = findById(userId);
+  if (!user) return null;
+  return { ...ensureSocial(user) };
+}
+
+export function setDmPinned(userId, friendId, pinned) {
+  const user = findById(userId);
+  if (!user?.friends.includes(friendId)) return { error: 'Arkadaş bulunamadı.' };
+  const s = ensureSocial(user);
+  s.pinnedDms = s.pinnedDms.filter((id) => id !== friendId);
+  if (pinned) s.pinnedDms.unshift(friendId);
+  s.closedDms = s.closedDms.filter((id) => id !== friendId);
+  save();
+  return { social: getSocial(userId) };
+}
+
+export function closeDm(userId, friendId) {
+  const user = findById(userId);
+  if (!user) return { error: 'Oturum geçersiz.' };
+  const s = ensureSocial(user);
+  if (!s.closedDms.includes(friendId)) s.closedDms.push(friendId);
+  s.pinnedDms = s.pinnedDms.filter((id) => id !== friendId);
+  delete s.unreadDms[friendId];
+  save();
+  return { social: getSocial(userId) };
+}
+
+export function reopenDm(userId, friendId) {
+  const user = findById(userId);
+  if (!user) return { error: 'Oturum geçersiz.' };
+  const s = ensureSocial(user);
+  s.closedDms = s.closedDms.filter((id) => id !== friendId);
+  save();
+  return { social: getSocial(userId) };
+}
+
+export function markDmRead(userId, friendId) {
+  const user = findById(userId);
+  if (!user) return { error: 'Oturum geçersiz.' };
+  delete ensureSocial(user).unreadDms[friendId];
+  save();
+  return { social: getSocial(userId) };
+}
+
+export function setDmMuted(userId, friendId, until) {
+  const user = findById(userId);
+  if (!user?.friends.includes(friendId)) return { error: 'Arkadaş bulunamadı.' };
+  const s = ensureSocial(user);
+  if (until === null || until === undefined) delete s.mutedDms[friendId];
+  else s.mutedDms[friendId] = until; // 0 = sonsuza kadar
+  save();
+  return { social: getSocial(userId) };
+}
+
+export function setIgnored(userId, targetId, ignored) {
+  const user = findById(userId);
+  if (!user || targetId === userId) return { error: 'Geçersiz.' };
+  const s = ensureSocial(user);
+  s.ignored = s.ignored.filter((id) => id !== targetId);
+  if (ignored) s.ignored.push(targetId);
+  save();
+  return { social: getSocial(userId) };
+}
+
+export function setBlocked(userId, targetId, blocked) {
+  const user = findById(userId);
+  if (!user || targetId === userId) return { error: 'Geçersiz.' };
+  const s = ensureSocial(user);
+  s.blocked = s.blocked.filter((id) => id !== targetId);
+  if (blocked) {
+    s.blocked.push(targetId);
+    s.ignored = s.ignored.filter((id) => id !== targetId);
+    if (!s.ignored.includes(targetId)) s.ignored.push(targetId);
+    // Arkadaşsa çıkar
+    if (user.friends.includes(targetId)) removeFriend(userId, targetId);
+  }
+  save();
+  return { social: getSocial(userId) };
+}
+
+export function setFriendNote(userId, friendId, note) {
+  const user = findById(userId);
+  if (!user) return { error: 'Oturum geçersiz.' };
+  ensureSocial(user).notes[friendId] = String(note || '').slice(0, 500);
+  save();
+  return { social: getSocial(userId) };
+}
+
+export function isBlockedEither(a, b) {
+  const ua = findById(a);
+  const ub = findById(b);
+  if (!ua || !ub) return true;
+  return ensureSocial(ua).blocked.includes(b) || ensureSocial(ub).blocked.includes(a);
+}
+
+export function isDmMuted(userId, friendId) {
+  const user = findById(userId);
+  if (!user) return false;
+  const until = ensureSocial(user).mutedDms[friendId];
+  if (until === undefined) return false;
+  if (until === 0) return true;
+  if (Date.now() > until) {
+    delete ensureSocial(user).mutedDms[friendId];
+    save();
+    return false;
+  }
+  return true;
+}
+
+export function inviteToServer(inviterId, serverId, targetUserId) {
+  const server = getServer(serverId);
+  if (!server) return { error: 'Sunucu bulunamadı.' };
+  if (!isMember(server, inviterId)) return { error: 'Yetkiniz yok.' };
+  const target = findById(targetUserId);
+  if (!target) return { error: 'Kullanıcı bulunamadı.' };
+  if (isBlockedEither(inviterId, targetUserId)) return { error: 'Bu kullanıcıya davet gönderilemez.' };
+  if (isMember(server, targetUserId)) return { error: 'Kullanıcı zaten sunucuda.' };
+  server.members.push(targetUserId);
+  if (!target.servers.includes(serverId)) target.servers.push(serverId);
+  save();
+  return { server: publicServer(server) };
+}
+
+export function getUserProfile(viewerId, targetId) {
+  const target = findById(targetId);
+  const viewer = findById(viewerId);
+  if (!target || !viewer) return { error: 'Kullanıcı bulunamadı.' };
+  const vs = ensureSocial(viewer);
+  const mutualFriends = viewer.friends
+    .filter((id) => target.friends.includes(id))
+    .map((id) => findById(id))
+    .filter(Boolean)
+    .map((u) => ({ id: u.id, username: u.username }));
+  const viewerServers = new Set(viewer.servers || []);
+  const mutualServers = (target.servers || [])
+    .filter((id) => viewerServers.has(id))
+    .map((id) => getServer(id))
+    .filter(Boolean)
+    .map((s) => ({ id: s.id, name: s.name }));
+  return {
+    user: { id: target.id, username: target.username, createdAt: target.createdAt },
+    isFriend: viewer.friends.includes(targetId),
+    friendSince: vs.friendSince[targetId] || null,
+    note: vs.notes[targetId] || '',
+    ignored: vs.ignored.includes(targetId),
+    blocked: vs.blocked.includes(targetId),
+    mutualFriends,
+    mutualServers,
+  };
 }
 
 export function getFriends(userId) {
@@ -446,6 +635,15 @@ export function pushDM(fromId, toId, text) {
   const msg = { id: crypto.randomUUID(), fromId, text: text.trim(), ts: Date.now() };
   data.dms[key].push(msg);
   if (data.dms[key].length > MAX_MESSAGES) data.dms[key] = data.dms[key].slice(-MAX_MESSAGES);
+  const channel = getOrCreateDMChannel(fromId, toId);
+  channel.lastMessageAt = msg.ts;
+  channel.lastFromId = fromId;
+  const recipient = findById(toId);
+  if (recipient) {
+    const s = ensureSocial(recipient);
+    s.closedDms = s.closedDms.filter((id) => id !== fromId);
+    s.unreadDms[fromId] = true;
+  }
   save();
   return msg;
 }
@@ -462,7 +660,7 @@ export function getOrCreateDMChannel(a, b) {
   let found = Object.values(data.dmChannels).find((c) => dmKey(c.users[0], c.users[1]) === key);
   if (!found) {
     const id = snowflake();
-    found = { id, users: [a, b], createdAt: Date.now() };
+    found = { id, users: [a, b], createdAt: Date.now(), lastMessageAt: 0, lastFromId: null };
     data.dmChannels[id] = found;
     save();
   }
@@ -471,6 +669,16 @@ export function getOrCreateDMChannel(a, b) {
 
 export function getDMChannelById(id) {
   return data.dmChannels[id] || null;
+}
+
+export function getDmActivity(userId, friendId) {
+  const channel = Object.values(data.dmChannels).find(
+    (c) => c.users.includes(userId) && c.users.includes(friendId)
+  );
+  if (channel?.lastMessageAt) return { lastMessageAt: channel.lastMessageAt, lastFromId: channel.lastFromId || null, dmChannelId: channel.id };
+  const msgs = getDMs(userId, friendId, 1);
+  const last = msgs[msgs.length - 1];
+  return { lastMessageAt: last?.ts || 0, lastFromId: last?.fromId || null, dmChannelId: channel?.id || null };
 }
 
 load();

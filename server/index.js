@@ -123,9 +123,34 @@ const voiceParticipants = new Map();
 function isOnline(userId) { return onlineUsers.has(userId); }
 
 function friendsSnapshot(userId) {
-  return store.getFriends(userId).map((f) => ({
-    id: f.id, username: f.username, online: isOnline(f.id),
-  }));
+  const social = store.getSocial(userId) || {};
+  return store.getFriends(userId).map((f) => {
+    const act = store.getDmActivity(userId, f.id);
+    const mutedUntil = social.mutedDms?.[f.id];
+    return {
+      id: f.id,
+      username: f.username,
+      online: isOnline(f.id),
+      pinned: (social.pinnedDms || []).includes(f.id),
+      closed: (social.closedDms || []).includes(f.id),
+      unread: !!social.unreadDms?.[f.id],
+      ignored: (social.ignored || []).includes(f.id),
+      blocked: (social.blocked || []).includes(f.id),
+      mutedUntil: mutedUntil === undefined ? null : mutedUntil,
+      lastMessageAt: act.lastMessageAt || 0,
+      dmChannelId: act.dmChannelId,
+    };
+  });
+}
+
+function emitSocial(userId) {
+  const social = store.getSocial(userId);
+  const sockets = onlineUsers.get(userId);
+  if (sockets) {
+    for (const sid of sockets) {
+      io.to(sid).emit('social-update', { social, friends: friendsSnapshot(userId) });
+    }
+  }
 }
 
 function notifyFriendsOfChange(userId) {
@@ -192,6 +217,7 @@ io.on('connection', (socket) => {
     user: { id: userId, username: socket.data.username },
     friends: friendsSnapshot(userId),
     friendRequests: store.getFriendRequests(userId),
+    social: store.getSocial(userId),
     servers: store.getUserServers(userId),
   });
   if (wasOffline) notifyFriendsOfChange(userId);
@@ -218,6 +244,8 @@ io.on('connection', (socket) => {
       notifyFriendsOfChange(friend.id);
       emitFriendRequestsTo(userId);
       emitFriendRequestsTo(friend.id);
+      emitSocial(userId);
+      emitSocial(friend.id);
       return;
     }
 
@@ -252,6 +280,8 @@ io.on('connection', (socket) => {
     notifyFriendsOfChange(friend.id);
     emitFriendRequestsTo(userId);
     emitFriendRequestsTo(friend.id);
+    emitSocial(userId);
+    emitSocial(friend.id);
   });
 
   socket.on('friend-decline', ({ requestId }, cb) => {
@@ -296,6 +326,8 @@ io.on('connection', (socket) => {
   socket.on('remove-friend', ({ friendId }, cb) => {
     store.removeFriend(userId, friendId);
     cb?.({ success: true });
+    emitSocial(userId);
+    emitSocial(friendId);
     notifyFriendsOfChange(userId);
     notifyFriendsOfChange(friendId);
   });
@@ -423,12 +455,17 @@ io.on('connection', (socket) => {
     const friend = store.findById(friendId);
     const user = store.findById(userId);
     if (!friend || !user?.friends.includes(friendId)) return cb?.({ error: 'Arkadaş bulunamadı.' });
+    if (store.isBlockedEither(userId, friendId)) return cb?.({ error: 'Bu kullanıcıyla mesajlaşamazsınız.' });
     const channel = store.getOrCreateDMChannel(userId, friendId);
+    store.reopenDm(userId, friendId);
+    store.markDmRead(userId, friendId);
     cb?.({
       messages: store.getDMs(userId, friendId),
       friend: { id: friend.id, username: friend.username },
       dmChannelId: channel.id,
+      social: store.getSocial(userId),
     });
+    emitSocial(userId);
   });
 
   socket.on('get-dm-by-channel', ({ dmChannelId }, cb) => {
@@ -438,23 +475,111 @@ io.on('connection', (socket) => {
     const friend = store.findById(friendId);
     const user = store.findById(userId);
     if (!friend || !user?.friends.includes(friendId)) return cb?.({ error: 'Arkadaş bulunamadı.' });
+    store.reopenDm(userId, friendId);
+    store.markDmRead(userId, friendId);
     cb?.({
       messages: store.getDMs(userId, friendId),
       friend: { id: friend.id, username: friend.username },
       friendId,
       dmChannelId: channel.id,
+      social: store.getSocial(userId),
     });
+    emitSocial(userId);
   });
 
   socket.on('send-dm', ({ friendId, text }, cb) => {
     if (!text?.trim()) return cb?.({ error: 'Boş mesaj.' });
     const user = store.findById(userId);
     if (!user?.friends.includes(friendId)) return cb?.({ error: 'Arkadaş değil.' });
+    if (store.isBlockedEither(userId, friendId)) return cb?.({ error: 'Bu kullanıcıyla mesajlaşamazsınız.' });
     const msg = store.pushDM(userId, friendId, text);
     const payload = { fromId: userId, username: socket.data.username, message: msg };
     const sockets = onlineUsers.get(friendId);
-    if (sockets) for (const sid of sockets) io.to(sid).emit('dm', { friendId: userId, ...payload });
+    if (sockets) {
+      for (const sid of sockets) {
+        io.to(sid).emit('dm', {
+          friendId: userId,
+          muted: store.isDmMuted(friendId, userId),
+          ignored: !!store.getSocial(friendId)?.ignored?.includes(userId),
+          ...payload,
+        });
+      }
+      emitSocial(friendId);
+    }
     cb?.({ message: msg });
+    emitSocial(userId);
+  });
+
+  socket.on('dm-pin', ({ friendId, pinned }, cb) => {
+    const result = store.setDmPinned(userId, friendId, !!pinned);
+    if (result.error) return cb?.({ error: result.error });
+    cb?.(result);
+    emitSocial(userId);
+  });
+  socket.on('dm-close', ({ friendId }, cb) => {
+    const result = store.closeDm(userId, friendId);
+    if (result.error) return cb?.({ error: result.error });
+    cb?.(result);
+    emitSocial(userId);
+  });
+  socket.on('dm-read', ({ friendId }, cb) => {
+    const result = store.markDmRead(userId, friendId);
+    if (result.error) return cb?.({ error: result.error });
+    cb?.(result);
+    emitSocial(userId);
+  });
+  socket.on('dm-mute', ({ friendId, until }, cb) => {
+    const result = store.setDmMuted(userId, friendId, until);
+    if (result.error) return cb?.({ error: result.error });
+    cb?.(result);
+    emitSocial(userId);
+  });
+  socket.on('user-ignore', ({ targetId, ignored }, cb) => {
+    const result = store.setIgnored(userId, targetId, !!ignored);
+    if (result.error) return cb?.({ error: result.error });
+    cb?.(result);
+    emitSocial(userId);
+  });
+  socket.on('user-block', ({ targetId, blocked }, cb) => {
+    const result = store.setBlocked(userId, targetId, !!blocked);
+    if (result.error) return cb?.({ error: result.error });
+    cb?.(result);
+    emitSocial(userId);
+    if (blocked) {
+      notifyFriendsOfChange(userId);
+      notifyFriendsOfChange(targetId);
+    }
+  });
+  socket.on('friend-note', ({ friendId, note }, cb) => {
+    const result = store.setFriendNote(userId, friendId, note);
+    if (result.error) return cb?.({ error: result.error });
+    cb?.(result);
+  });
+  socket.on('get-profile', ({ userId: targetId }, cb) => {
+    const result = store.getUserProfile(userId, targetId);
+    if (result.error) return cb?.({ error: result.error });
+    cb?.({
+      ...result,
+      online: isOnline(targetId),
+      dmChannelId: store.getDmActivity(userId, targetId).dmChannelId,
+    });
+  });
+  socket.on('invite-to-server', ({ serverId, targetId }, cb) => {
+    const result = store.inviteToServer(userId, serverId, targetId);
+    if (result.error) return cb?.({ error: result.error });
+    cb?.({ server: result.server });
+    const server = store.getServer(serverId);
+    for (const memberId of server.members) {
+      const sockets = onlineUsers.get(memberId);
+      if (sockets) for (const sid of sockets) io.to(sid).emit('server-updated', { server: result.server });
+    }
+    // Hedefe sunucu listesi güncellemesi
+    const ts = onlineUsers.get(targetId);
+    if (ts) {
+      for (const sid of ts) {
+        io.to(sid).emit('server-invited', { server: result.server });
+      }
+    }
   });
 
   // ---- Voice channels (mesh signaling) ----

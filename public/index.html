@@ -306,6 +306,13 @@
             <div class="setting-label"><span class="setting-name">Animasyonlar</span></div>
             <span class="switch"><input type="checkbox" id="toggle-animations" checked /><span class="switch-track"><span class="switch-thumb"></span></span></span>
           </label>
+          <label class="setting-row" for="toggle-developer">
+            <div class="setting-label">
+              <span class="setting-name">Geliştirici Modu</span>
+              <span class="setting-desc">Kullanıcı ve kanal ID kopyalama</span>
+            </div>
+            <span class="switch"><input type="checkbox" id="toggle-developer" /><span class="switch-track"><span class="switch-thumb"></span></span></span>
+          </label>
         </div>
         <div class="settings-group">
           <div class="settings-group-title">Hesap</div>
@@ -318,6 +325,49 @@
   </div>
 
   <div id="toast" class="toast hidden"></div>
+
+  <!-- DM sağ tık menüsü -->
+  <div id="ctx-menu" class="ctx-menu hidden" role="menu"></div>
+
+  <!-- Profil popup -->
+  <div id="profile-overlay" class="profile-overlay hidden">
+    <div class="profile-modal" id="profile-modal">
+      <button type="button" class="profile-modal-close" id="profile-modal-close" aria-label="Kapat">×</button>
+      <div class="profile-modal-banner"></div>
+      <div class="profile-modal-body">
+        <div class="profile-modal-left">
+          <div class="profile-modal-avatar-wrap">
+            <span class="profile-modal-avatar" id="pm-avatar">?</span>
+            <span class="user-chip-dot" id="pm-dot"></span>
+          </div>
+          <div class="profile-modal-name" id="pm-name">—</div>
+          <div class="profile-modal-user" id="pm-username">—</div>
+          <div class="profile-modal-actions">
+            <button type="button" class="btn btn-secondary" id="pm-msg">Mesaj</button>
+            <button type="button" class="btn btn-secondary hidden" id="pm-unfriend">Arkadaşı Çıkar</button>
+            <button type="button" class="btn btn-secondary" id="pm-more" title="Daha fazla">⋯</button>
+          </div>
+          <div class="profile-modal-meta">
+            <div class="profile-meta-label">Şu tarihten beri üye</div>
+            <div class="profile-meta-value" id="pm-member-since">—</div>
+            <div class="profile-meta-label" id="pm-friend-since-label">Şu tarihten beri arkadaş</div>
+            <div class="profile-meta-value" id="pm-friend-since">—</div>
+          </div>
+          <div class="profile-modal-note">
+            <div class="profile-meta-label">Not (sadece sana görünür)</div>
+            <textarea id="pm-note" class="profile-note-input" placeholder="Not eklemek için tıkla" rows="2" maxlength="500"></textarea>
+          </div>
+        </div>
+        <div class="profile-modal-right">
+          <div class="profile-tabs">
+            <button type="button" class="profile-tab active" data-ptab="friends" id="pm-tab-friends">Ortak arkadaş</button>
+            <button type="button" class="profile-tab" data-ptab="servers" id="pm-tab-servers">Ortak sunucu</button>
+          </div>
+          <ul class="profile-mutual-list" id="pm-mutual-list"></ul>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="/voice.js" type="module"></script>

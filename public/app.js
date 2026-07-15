@@ -9,6 +9,9 @@ let currentUser = null;
 let friends = [];
 let friendRequests = { incoming: [], outgoing: [] };
 let friendsTab = 'online'; // online | all | pending | add
+let social = { pinnedDms: [], closedDms: [], mutedDms: {}, ignored: [], blocked: [], unreadDms: {}, friendSince: {}, notes: {} };
+let profileTarget = null;
+let profileMutualTab = 'friends';
 let servers = [];
 let activeServer = null; // full server object from get-server
 let activeView = 'friends'; // friends | empty | chat | dm | voice | settings
@@ -44,7 +47,7 @@ function applyRoute() {
   selectServer(a, b || null, false);
 }
 
-const settings = { theme: 'dark', accent: 'blue', animations: true };
+const settings = { theme: 'dark', accent: 'blue', animations: true, developer: false };
 
 /* ================= Utils ================= */
 function initials(name) { return (name || '?').slice(0, 2).toUpperCase(); }
@@ -95,6 +98,7 @@ function loadSettings() {
     settings.theme = localStorage.getItem('muck_theme') || localStorage.getItem('streamuck_theme') || 'dark';
     settings.accent = localStorage.getItem('muck_accent') || localStorage.getItem('streamuck_accent') || 'blue';
     settings.animations = (localStorage.getItem('muck_animations') || localStorage.getItem('streamuck_animations')) !== 'off';
+    settings.developer = (localStorage.getItem('muck_developer') || 'off') === 'on';
   } catch {}
 }
 function applySettings() {
@@ -106,6 +110,7 @@ function applySettings() {
   document.querySelectorAll('[data-theme-value]').forEach((el) => el.classList.toggle('active', el.dataset.themeValue === settings.theme));
   document.querySelectorAll('[data-accent-value]').forEach((el) => el.classList.toggle('active', el.dataset.accentValue === settings.accent));
   const ta = $('toggle-animations'); if (ta) ta.checked = settings.animations;
+  const td = $('toggle-developer'); if (td) td.checked = settings.developer;
 }
 function saveSetting(key, storageKey, value) {
   settings[key] = value;
@@ -256,21 +261,38 @@ function updateFriendsBadge() {
 }
 
 function renderFriends() {
-  // Sidebar: Direkt Mesajlar = arkadaş listesi
+  // Sidebar: Direkt Mesajlar
   const list = $('dm-list');
   if (!list) return;
   list.innerHTML = '';
-  const sorted = [...friends].sort((a, b) => Number(b.online) - Number(a.online) || a.username.localeCompare(b.username));
-  for (const f of sorted) {
+  const visible = [...friends].filter((f) => !f.closed && !f.blocked);
+  visible.sort((a, b) => {
+    const ap = a.pinned ? 1 : 0;
+    const bp = b.pinned ? 1 : 0;
+    if (ap !== bp) return bp - ap;
+    return (b.lastMessageAt || 0) - (a.lastMessageAt || 0) || a.username.localeCompare(b.username);
+  });
+  for (const f of visible) {
     const li = document.createElement('li');
     const btn = document.createElement('button');
-    btn.className = 'sidebar-item sidebar-item--user' + (activeDmFriendId === f.id ? ' active' : '');
+    const unread = !!f.unread;
+    btn.className = 'sidebar-item sidebar-item--user'
+      + (activeDmFriendId === f.id ? ' active' : '')
+      + (unread ? ' unread' : '')
+      + (f.pinned ? ' pinned' : '');
+    btn.dataset.allowMenu = '1';
+    btn.dataset.friendId = f.id;
     btn.innerHTML = userChipHtml(f.username, !!f.online, { size: 'sm' });
     btn.addEventListener('click', () => openDM(f.id));
+    btn.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openDmContextMenu(e.clientX, e.clientY, f);
+    });
     li.appendChild(btn);
     list.appendChild(li);
   }
-  $('dm-empty')?.classList.toggle('hidden', friends.length > 0);
+  $('dm-empty')?.classList.toggle('hidden', visible.length > 0);
   updateFriendsBadge();
   if (activeView === 'friends') renderFriendsMain();
 }
@@ -590,6 +612,9 @@ function openDM(friendId, push = true) {
   activeServer = null;
   activeDmFriendId = friendId;
   activeChannelId = null;
+  // Açınca okundu + closed kaldırılır (server emitSocial)
+  friend.unread = false;
+  friend.closed = false;
   showSidebarHome();
   setRailActive('home');
   $('dm-title').textContent = `@ ${friend.username}`;
@@ -599,6 +624,7 @@ function openDM(friendId, push = true) {
   socket.emit('open-dm', { friendId }, (res) => {
     if (res.error) { toast(res.error); return; }
     activeDmChannelId = res.dmChannelId;
+    if (res.social) social = res.social;
     renderDMMessages(res.messages, friendId);
     if (push) navTo(`/channels/@me/${res.dmChannelId}`);
   });
@@ -1177,6 +1203,437 @@ function doLogout() {
   showAuth();
 }
 
+/* ================= DM context menu + profil popup ================= */
+const MUTE_OPTIONS = [
+  { label: '15 Dakika', ms: 15 * 60 * 1000 },
+  { label: '1 Saat', ms: 60 * 60 * 1000 },
+  { label: '3 Saat', ms: 3 * 60 * 60 * 1000 },
+  { label: '8 Saat', ms: 8 * 60 * 60 * 1000 },
+  { label: '24 Saat', ms: 24 * 60 * 60 * 1000 },
+  { label: 'Ben tekrar açana kadar', ms: 0 },
+];
+
+function formatDateTr(ts) {
+  if (!ts) return '—';
+  try {
+    return new Date(ts).toLocaleDateString('tr-TR', { day: 'numeric', month: 'short', year: 'numeric' });
+  } catch { return '—'; }
+}
+
+function isFriendMuted(f) {
+  if (!f || f.mutedUntil == null) return false;
+  if (f.mutedUntil === 0) return true;
+  return Date.now() < f.mutedUntil;
+}
+
+function closeCtxMenu() {
+  const menu = $('ctx-menu');
+  if (!menu) return;
+  menu.classList.add('hidden');
+  menu.innerHTML = '';
+  menu.style.left = '';
+  menu.style.top = '';
+}
+
+function placeCtxMenu(el, x, y) {
+  el.classList.remove('hidden');
+  const pad = 8;
+  const rect = el.getBoundingClientRect();
+  let left = x;
+  let top = y;
+  if (left + rect.width > window.innerWidth - pad) left = window.innerWidth - rect.width - pad;
+  if (top + rect.height > window.innerHeight - pad) top = window.innerHeight - rect.height - pad;
+  if (left < pad) left = pad;
+  if (top < pad) top = pad;
+  el.style.left = `${left}px`;
+  el.style.top = `${top}px`;
+}
+
+function ctxItem({ label, danger, disabled, right, onClick }) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'ctx-item' + (danger ? ' danger' : '');
+  btn.disabled = !!disabled;
+  btn.innerHTML = `<span>${escapeHtml(label)}</span>${right ? `<span class="ctx-right">${escapeHtml(right)}</span>` : ''}`;
+  if (onClick && !disabled) {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      onClick();
+    });
+  }
+  return btn;
+}
+
+function ctxSep() {
+  const d = document.createElement('div');
+  d.className = 'ctx-sep';
+  return d;
+}
+
+function openSubmenu(anchorBtn, build) {
+  document.querySelectorAll('.ctx-sub').forEach((n) => n.remove());
+  const sub = document.createElement('div');
+  sub.className = 'ctx-sub';
+  build(sub);
+  $('ctx-menu').appendChild(sub);
+  const r = anchorBtn.getBoundingClientRect();
+  const menu = $('ctx-menu').getBoundingClientRect();
+  let left = r.right - menu.left + 4;
+  let top = r.top - menu.top;
+  sub.style.left = `${left}px`;
+  sub.style.top = `${top}px`;
+  // Viewport dışına taşarsa sola aç
+  requestAnimationFrame(() => {
+    const sr = sub.getBoundingClientRect();
+    if (sr.right > window.innerWidth - 8) sub.style.left = `${r.left - menu.left - sr.width - 4}px`;
+    if (sr.bottom > window.innerHeight - 8) sub.style.top = `${Math.max(0, top - (sr.bottom - window.innerHeight + 8))}px`;
+  });
+}
+
+function openDmContextMenu(x, y, friend) {
+  const menu = $('ctx-menu');
+  if (!menu || !friend) return;
+  closeCtxMenu();
+  const muted = isFriendMuted(friend);
+
+  menu.appendChild(ctxItem({
+    label: 'Okunmuş Olarak İşaretle',
+    disabled: !friend.unread,
+    onClick: () => {
+      socket.emit('dm-read', { friendId: friend.id }, () => closeCtxMenu());
+    },
+  }));
+  menu.appendChild(ctxSep());
+  menu.appendChild(ctxItem({
+    label: friend.pinned ? 'Sabiti Kaldır' : 'Sabitle',
+    onClick: () => {
+      socket.emit('dm-pin', { friendId: friend.id, pinned: !friend.pinned }, () => closeCtxMenu());
+    },
+  }));
+  menu.appendChild(ctxSep());
+  menu.appendChild(ctxItem({
+    label: 'Profil',
+    onClick: () => { closeCtxMenu(); openUserProfile(friend.id); },
+  }));
+  menu.appendChild(ctxItem({
+    label: 'DM\'yi Kapat',
+    onClick: () => {
+      socket.emit('dm-close', { friendId: friend.id }, () => {
+        closeCtxMenu();
+        if (activeDmFriendId === friend.id) {
+          activeDmFriendId = null;
+          activeDmChannelId = null;
+          openFriendsView();
+        }
+      });
+    },
+  }));
+  menu.appendChild(ctxSep());
+
+  const inviteBtn = ctxItem({ label: 'Sunucuya Davet Et', right: '›' });
+  inviteBtn.addEventListener('mouseenter', () => {
+    openSubmenu(inviteBtn, (sub) => {
+      for (const s of servers) {
+        sub.appendChild(ctxItem({
+          label: s.name,
+          onClick: () => {
+            socket.emit('invite-to-server', { serverId: s.id, targetId: friend.id }, (res) => {
+              closeCtxMenu();
+              if (res?.error) toast(res.error);
+              else toast(`${friend.username} sunucuya davet edildi`);
+            });
+          },
+        }));
+      }
+      if (!servers.length) sub.appendChild(ctxItem({ label: 'Sunucu yok', disabled: true }));
+    });
+  });
+  menu.appendChild(inviteBtn);
+
+  menu.appendChild(ctxItem({
+    label: 'Arkadaşı Çıkar',
+    onClick: () => {
+      closeCtxMenu();
+      confirmRemoveFriend(friend);
+    },
+  }));
+  menu.appendChild(ctxItem({
+    label: friend.ignored ? 'Yoksaymayı Kaldır' : 'Yok Say',
+    onClick: () => {
+      socket.emit('user-ignore', { targetId: friend.id, ignored: !friend.ignored }, () => closeCtxMenu());
+    },
+  }));
+  menu.appendChild(ctxItem({
+    label: friend.blocked ? 'Engeli Kaldır' : 'Engelle',
+    danger: true,
+    onClick: () => {
+      closeCtxMenu();
+      if (friend.blocked) {
+        socket.emit('user-block', { targetId: friend.id, blocked: false });
+        return;
+      }
+      showModal('Engelle', `<p><strong>${escapeHtml(friend.username)}</strong> engellenecek. Arkadaşlıktan çıkarılır ve mesajlaşamazsınız.</p>`, [
+        { label: 'İptal', className: 'btn-secondary', onClick: closeModal },
+        {
+          label: 'Engelle', className: 'btn-danger', onClick: () => {
+            closeModal();
+            socket.emit('user-block', { targetId: friend.id, blocked: true }, () => {
+              if (activeDmFriendId === friend.id) openFriendsView();
+            });
+          },
+        },
+      ]);
+    },
+  }));
+  menu.appendChild(ctxSep());
+
+  const muteBtn = ctxItem({
+    label: muted ? `@${friend.username} susturmayı kaldır` : `@${friend.username} kanalını sustur`,
+    right: muted ? '' : '›',
+  });
+  if (muted) {
+    muteBtn.addEventListener('click', () => {
+      socket.emit('dm-mute', { friendId: friend.id, until: null }, () => closeCtxMenu());
+    });
+  } else {
+    muteBtn.addEventListener('mouseenter', () => {
+      openSubmenu(muteBtn, (sub) => {
+        for (const opt of MUTE_OPTIONS) {
+          sub.appendChild(ctxItem({
+            label: opt.label,
+            onClick: () => {
+              const until = opt.ms === 0 ? 0 : Date.now() + opt.ms;
+              socket.emit('dm-mute', { friendId: friend.id, until }, () => closeCtxMenu());
+            },
+          }));
+        }
+      });
+    });
+  }
+  menu.appendChild(muteBtn);
+
+  if (settings.developer) {
+    menu.appendChild(ctxSep());
+    menu.appendChild(ctxItem({
+      label: 'Kullanıcı ID\'sini Kopyala',
+      right: 'ID',
+      onClick: async () => {
+        closeCtxMenu();
+        try { await navigator.clipboard.writeText(String(friend.id)); toast('Kullanıcı ID kopyalandı'); }
+        catch { toast('Kopyalanamadı'); }
+      },
+    }));
+    menu.appendChild(ctxItem({
+      label: 'Kanal ID\'sini Kopyala',
+      right: 'ID',
+      onClick: async () => {
+        closeCtxMenu();
+        const id = friend.dmChannelId || activeDmChannelId;
+        if (!id) { toast('Kanal ID yok'); return; }
+        try { await navigator.clipboard.writeText(String(id)); toast('Kanal ID kopyalandı'); }
+        catch { toast('Kopyalanamadı'); }
+      },
+    }));
+  }
+
+  placeCtxMenu(menu, x, y);
+}
+
+function confirmRemoveFriend(friend) {
+  showModal('Arkadaşı çıkar', `<p><strong>${escapeHtml(friend.username)}</strong> arkadaşlık listenden çıkarılacak.</p>`, [
+    { label: 'İptal', className: 'btn-secondary', onClick: closeModal },
+    {
+      label: 'Çıkar', className: 'btn-danger', onClick: () => {
+        closeModal();
+        socket.emit('remove-friend', { friendId: friend.id }, () => {
+          friends = friends.filter((f) => f.id !== friend.id);
+          if (activeDmFriendId === friend.id) {
+            activeDmFriendId = null;
+            activeDmChannelId = null;
+            openFriendsView();
+          } else renderFriends();
+          closeUserProfile();
+        });
+      },
+    },
+  ]);
+}
+
+function openUserProfile(userId) {
+  if (!socket) return;
+  socket.emit('get-profile', { userId }, (res) => {
+    if (res?.error) { toast(res.error); return; }
+    profileTarget = res;
+    profileMutualTab = 'friends';
+    renderProfileModal();
+    $('profile-overlay')?.classList.remove('hidden');
+  });
+}
+
+function closeUserProfile() {
+  $('profile-overlay')?.classList.add('hidden');
+  profileTarget = null;
+  closeCtxMenu();
+}
+
+function renderProfileModal() {
+  const p = profileTarget;
+  if (!p?.user) return;
+  const u = p.user;
+  $('pm-avatar').textContent = initials(u.username);
+  $('pm-name').textContent = u.username;
+  $('pm-username').textContent = `@${u.username}`;
+  $('pm-dot').classList.toggle('on', !!p.online);
+  $('pm-member-since').textContent = formatDateTr(u.createdAt);
+  const hasFriend = !!p.isFriend;
+  $('pm-friend-since-label').classList.toggle('hidden', !hasFriend);
+  $('pm-friend-since').classList.toggle('hidden', !hasFriend);
+  $('pm-friend-since').textContent = formatDateTr(p.friendSince);
+  $('pm-unfriend').classList.toggle('hidden', !hasFriend);
+  $('pm-note').value = p.note || '';
+  $('pm-tab-friends').textContent = `${p.mutualFriends?.length || 0} Ortak Arkadaş`;
+  $('pm-tab-servers').textContent = `${p.mutualServers?.length || 0} Ortak Sunucu`;
+  document.querySelectorAll('.profile-tab').forEach((t) => {
+    t.classList.toggle('active', t.dataset.ptab === profileMutualTab);
+  });
+  const list = $('pm-mutual-list');
+  list.innerHTML = '';
+  if (profileMutualTab === 'friends') {
+    for (const f of p.mutualFriends || []) {
+      const li = document.createElement('li');
+      li.innerHTML = userChipHtml(f.username, false, { size: 'sm' });
+      list.appendChild(li);
+    }
+    if (!(p.mutualFriends || []).length) {
+      const li = document.createElement('li');
+      li.style.color = 'var(--muted)';
+      li.textContent = 'Ortak arkadaş yok.';
+      list.appendChild(li);
+    }
+  } else {
+    for (const s of p.mutualServers || []) {
+      const li = document.createElement('li');
+      li.textContent = s.name;
+      list.appendChild(li);
+    }
+    if (!(p.mutualServers || []).length) {
+      const li = document.createElement('li');
+      li.style.color = 'var(--muted)';
+      li.textContent = 'Ortak sunucu yok.';
+      list.appendChild(li);
+    }
+  }
+}
+
+function openProfileMoreMenu(btn) {
+  const p = profileTarget;
+  if (!p?.user) return;
+  const menu = $('ctx-menu');
+  closeCtxMenu();
+  const inviteBtn = ctxItem({ label: 'Sunucuya Davet Et', right: '›' });
+  inviteBtn.addEventListener('mouseenter', () => {
+    openSubmenu(inviteBtn, (sub) => {
+      for (const s of servers) {
+        sub.appendChild(ctxItem({
+          label: s.name,
+          onClick: () => {
+            socket.emit('invite-to-server', { serverId: s.id, targetId: p.user.id }, (res) => {
+              closeCtxMenu();
+              if (res?.error) toast(res.error);
+              else toast('Davet gönderildi');
+            });
+          },
+        }));
+      }
+      if (!servers.length) sub.appendChild(ctxItem({ label: 'Sunucu yok', disabled: true }));
+    });
+  });
+  menu.appendChild(inviteBtn);
+  menu.appendChild(ctxSep());
+  menu.appendChild(ctxItem({
+    label: p.ignored ? 'Yoksaymayı Kaldır' : 'Yok Say',
+    onClick: () => {
+      socket.emit('user-ignore', { targetId: p.user.id, ignored: !p.ignored }, (res) => {
+        closeCtxMenu();
+        if (!res?.error) {
+          p.ignored = !p.ignored;
+        }
+      });
+    },
+  }));
+  menu.appendChild(ctxItem({
+    label: p.blocked ? 'Engeli Kaldır' : 'Engelle',
+    danger: true,
+    onClick: () => {
+      closeCtxMenu();
+      socket.emit('user-block', { targetId: p.user.id, blocked: !p.blocked }, () => {
+        closeUserProfile();
+      });
+    },
+  }));
+  if (settings.developer) {
+    menu.appendChild(ctxSep());
+    menu.appendChild(ctxItem({
+      label: 'Kullanıcı ID\'sini Kopyala',
+      right: 'ID',
+      onClick: async () => {
+        closeCtxMenu();
+        try { await navigator.clipboard.writeText(String(p.user.id)); toast('Kullanıcı ID kopyalandı'); }
+        catch { toast('Kopyalanamadı'); }
+      },
+    }));
+  }
+  const rect = btn.getBoundingClientRect();
+  placeCtxMenu(menu, rect.left, rect.bottom + 4);
+}
+
+$('profile-modal-close')?.addEventListener('click', closeUserProfile);
+$('profile-overlay')?.addEventListener('click', (e) => {
+  if (e.target === $('profile-overlay')) closeUserProfile();
+});
+$('pm-msg')?.addEventListener('click', () => {
+  const id = profileTarget?.user?.id;
+  if (!id) return;
+  closeUserProfile();
+  openDM(id);
+});
+$('pm-unfriend')?.addEventListener('click', () => {
+  const u = profileTarget?.user;
+  if (!u) return;
+  confirmRemoveFriend(u);
+});
+$('pm-more')?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  openProfileMoreMenu(e.currentTarget);
+});
+document.querySelectorAll('.profile-tab').forEach((t) => {
+  t.addEventListener('click', () => {
+    profileMutualTab = t.dataset.ptab;
+    renderProfileModal();
+  });
+});
+let noteTimer = null;
+$('pm-note')?.addEventListener('input', () => {
+  clearTimeout(noteTimer);
+  noteTimer = setTimeout(() => {
+    const id = profileTarget?.user?.id;
+    if (!id) return;
+    const note = $('pm-note').value;
+    socket.emit('friend-note', { friendId: id, note });
+    if (profileTarget) profileTarget.note = note;
+  }, 400);
+});
+
+document.addEventListener('click', () => closeCtxMenu());
+$('ctx-menu')?.addEventListener('click', (e) => e.stopPropagation());
+$('ctx-menu')?.addEventListener('contextmenu', (e) => e.preventDefault());
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    closeCtxMenu();
+    if (!$('profile-overlay')?.classList.contains('hidden')) closeUserProfile();
+  }
+});
+
 /* ================= Socket ================= */
 function connectSocket(token) {
   if (socket) socket.disconnect();
@@ -1191,10 +1648,11 @@ function connectSocket(token) {
     if (err.message === 'unauthorized') { deleteCookie('muck_token'); showAuth(); }
   });
 
-  socket.on('init', ({ user, friends: fr, friendRequests: frReq, servers: srv }) => {
+  socket.on('init', ({ user, friends: fr, friendRequests: frReq, servers: srv, social: soc }) => {
     currentUser = user;
     friends = fr || [];
     friendRequests = frReq || { incoming: [], outgoing: [] };
+    social = soc || social;
     servers = srv;
     $('user-name').textContent = user.username;
     $('user-avatar').textContent = initials(user.username);
@@ -1208,12 +1666,19 @@ function connectSocket(token) {
     applyRoute();
   });
 
+  socket.on('social-update', ({ social: soc, friends: fr }) => {
+    if (soc) social = soc;
+    if (fr) friends = fr;
+    renderFriends();
+    if (activeView === 'dm' && activeDmFriendId) renderProfile();
+  });
+
   socket.on('friend-update', (f) => {
     const idx = friends.findIndex((x) => x.id === f.id);
-    if (idx >= 0) friends[idx] = f; else friends.push(f);
+    if (idx >= 0) friends[idx] = { ...friends[idx], ...f };
+    else if (f.username) friends.push(f);
     if (f.online) onlineMembers.add(f.id); else onlineMembers.delete(f.id);
     renderFriends();
-    // Aktif üye paneli veya DM profili çevrimiçi durumunu yansıtsın.
     if (activeServer) renderMembers();
     if (activeView === 'dm' && activeDmFriendId === f.id) renderProfile();
   });
@@ -1234,7 +1699,7 @@ function connectSocket(token) {
     }
   });
 
-  socket.on('dm', ({ friendId, username, message }) => {
+  socket.on('dm', ({ friendId, username, message, muted, ignored }) => {
     if (activeDmFriendId === friendId && activeView === 'dm') {
       const div = document.createElement('div');
       div.className = 'msg';
@@ -1247,7 +1712,8 @@ function connectSocket(token) {
         </div>`;
       $('dm-messages').appendChild(div);
       $('dm-messages').scrollTop = $('dm-messages').scrollHeight;
-    } else {
+      socket.emit('dm-read', { friendId });
+    } else if (!muted && !ignored) {
       toast(`${username}: yeni mesaj`);
     }
   });
@@ -1262,6 +1728,12 @@ function connectSocket(token) {
       $('sidebar-title').textContent = server.name;
     }
     renderRail();
+  });
+
+  socket.on('server-invited', ({ server }) => {
+    if (!servers.find((s) => s.id === server.id)) servers.push(server);
+    renderRail();
+    toast(`${server.name} sunucusuna eklendin`);
   });
 
   socket.on('server-deleted', ({ serverId }) => {
@@ -1310,6 +1782,7 @@ $('accent-grid').addEventListener('click', (e) => {
   if (btn) saveSetting('accent', 'muck_accent', btn.dataset.accentValue);
 });
 $('toggle-animations').addEventListener('change', (e) => saveSetting('animations', 'muck_animations', e.target.checked));
+$('toggle-developer')?.addEventListener('change', (e) => saveSetting('developer', 'muck_developer', e.target.checked));
 
 /* ================= Mobile drawers + swipe ================= */
 function openLeftDrawer() { const a = $('app'); a.classList.add('nav-left'); a.classList.remove('nav-right'); }
@@ -1350,8 +1823,11 @@ document.addEventListener('touchend', (e) => {
   }
 }, { passive: true });
 
-/* Sağ tık menüsü (ileride özel menüler için kapalı) */
-document.addEventListener('contextmenu', (e) => e.preventDefault());
+/* Varsayılan sağ tık kapalı; özel menülü yerlerde biz açarız */
+document.addEventListener('contextmenu', (e) => {
+  if (e.target.closest('[data-allow-menu]')) return;
+  e.preventDefault();
+});
 
 /* ================= PWA ================= */
 if ('serviceWorker' in navigator) {
