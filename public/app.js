@@ -51,6 +51,19 @@ function initials(name) { return (name || '?').slice(0, 2).toUpperCase(); }
 function escapeHtml(s) {
   return (s || '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
+/** Avatar + durum noktası (+ isteğe bağlı alt yazı) — sol alt profil stili */
+function userChipHtml(username, online, { subtitle, size = 'sm', showSub = true } = {}) {
+  const status = online ? 'Çevrimiçi' : 'Çevrimdışı';
+  const sub = subtitle !== undefined ? subtitle : status;
+  return `
+    <span class="user-chip-avatar user-chip-avatar--${size}">${escapeHtml(initials(username))}
+      <span class="user-chip-dot ${online ? 'on' : ''}"></span>
+    </span>
+    <span class="user-chip-meta">
+      <span class="user-chip-name">${escapeHtml(username)}</span>
+      ${showSub && sub ? `<span class="user-chip-sub">${escapeHtml(sub)}</span>` : ''}
+    </span>`;
+}
 function formatTime(ts) {
   const d = new Date(ts);
   return d.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
@@ -164,9 +177,7 @@ function renderMembers() {
     const online = isMemberOnline(m.id);
     const li = document.createElement('li');
     li.className = `member-row${online ? '' : ' offline'}`;
-    li.innerHTML = `
-      <span class="member-avatar">${escapeHtml(initials(m.username))}<span class="member-status ${online ? 'on' : ''}"></span></span>
-      <span class="member-name">${escapeHtml(m.username)}</span>`;
+    li.innerHTML = userChipHtml(m.username, online, { size: 'md' });
     list.appendChild(li);
   }
 }
@@ -253,8 +264,8 @@ function renderFriends() {
   for (const f of sorted) {
     const li = document.createElement('li');
     const btn = document.createElement('button');
-    btn.className = 'sidebar-item' + (activeDmFriendId === f.id ? ' active' : '');
-    btn.innerHTML = `<span class="status-dot ${f.online ? 'on' : ''}"></span>${escapeHtml(f.username)}`;
+    btn.className = 'sidebar-item sidebar-item--user' + (activeDmFriendId === f.id ? ' active' : '');
+    btn.innerHTML = userChipHtml(f.username, !!f.online, { size: 'sm' });
     btn.addEventListener('click', () => openDM(f.id));
     li.appendChild(btn);
     list.appendChild(li);
@@ -327,13 +338,7 @@ function renderFriendsMain() {
     btn.type = 'button';
     btn.className = 'friend-row';
     btn.innerHTML = `
-      <span class="friend-row-avatar">${escapeHtml(initials(f.username))}
-        <span class="status-dot ${f.online ? 'on' : ''}"></span>
-      </span>
-      <span class="friend-row-meta">
-        <span class="friend-row-name">${escapeHtml(f.username)}</span>
-        <span class="friend-row-sub">${f.online ? 'Çevrimiçi' : 'Çevrimdışı'}</span>
-      </span>`;
+      ${userChipHtml(f.username, !!f.online, { size: 'md' })}`;
     btn.addEventListener('click', () => openDM(f.id));
     li.appendChild(btn);
     list.appendChild(li);
@@ -348,11 +353,10 @@ function makePendingRow(r, kind) {
   row.className = 'friend-row';
   row.style.cursor = 'default';
   row.innerHTML = `
-    <span class="friend-row-avatar">${escapeHtml(initials(r.user.username))}</span>
-    <span class="friend-row-meta">
-      <span class="friend-row-name">${escapeHtml(r.user.username)}</span>
-      <span class="friend-row-sub">${kind === 'incoming' ? 'Gelen istek' : 'Giden istek'}</span>
-    </span>
+    ${userChipHtml(r.user.username, false, {
+      subtitle: kind === 'incoming' ? 'Gelen istek' : 'Giden istek',
+      size: 'md',
+    })}
     <span class="friend-row-actions"></span>`;
   const actions = row.querySelector('.friend-row-actions');
   if (kind === 'incoming') {
@@ -488,11 +492,8 @@ function makeVoiceUserRow(p) {
     p.deafened ? VU_ICONS.headphoneOff : VU_ICONS.headphone,
   ];
   vu.innerHTML = `
-    <span class="status-dot on"></span>
-    <span class="voice-user-main">
-      <span class="voice-user-name">${escapeHtml(p.username)}</span>
-      <span class="voice-user-media">${media.join('')}</span>
-    </span>
+    ${userChipHtml(p.username, true, { showSub: false, size: 'xs' })}
+    <span class="voice-user-media">${media.join('')}</span>
     <span class="voice-user-audio">${audio.join('')}</span>`;
   return vu;
 }
