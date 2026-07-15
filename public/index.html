@@ -60,9 +60,6 @@
         <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6V5Z"/></svg>
       </button>
       <div class="rail-spacer"></div>
-      <button class="rail-btn rail-settings" id="btn-settings" title="Ayarlar" aria-label="Ayarlar">
-        <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="m19.14 12.94.94-.73a.5.5 0 0 0 .12-.64l-1.78-3.08a.5.5 0 0 0-.6-.22l-1.1.44a6.9 6.9 0 0 0-1.13-.65l-.17-1.18a.5.5 0 0 0-.5-.42h-3.56a.5.5 0 0 0-.5.42l-.17 1.18c-.4.16-.78.38-1.13.65l-1.1-.44a.5.5 0 0 0-.6.22L4.6 11.57a.5.5 0 0 0 .12.64l.94.73a5.7 5.7 0 0 0 0 1.32l-.94.73a.5.5 0 0 0-.12.64l1.78 3.08a.5.5 0 0 0 .6.22l1.1-.44c.35.27.73.49 1.13.65l.17 1.18a.5.5 0 0 0 .5.42h3.56a.5.5 0 0 0 .5-.42l.17-1.18c.4-.16.78-.38 1.13-.65l1.1.44a.5.5 0 0 0 .6-.22l1.78-3.08a.5.5 0 0 0-.12-.64l-.94-.73a5.7 5.7 0 0 0 0-1.32ZM12 15.5A3.5 3.5 0 1 1 15.5 12 3.5 3.5 0 0 1 12 15.5Z"/></svg>
-      </button>
     </nav>
 
     <!-- Kenar çubuğu -->
@@ -91,62 +88,62 @@
           <ul id="voice-channels" class="sidebar-list"></ul>
         </div>
       </div>
-      <div class="sidebar-footer">
-        <!-- Ses bağlantı paneli (kanaldayken görünür) -->
-        <div class="voice-conn hidden" id="voice-conn">
-          <div class="voice-conn-top">
-            <div class="voice-conn-status">
-              <span class="voice-conn-signal" aria-hidden="true">
-                <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 20a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Zm4.24-3.76a6 6 0 0 0-8.48 0l1.42 1.42a4 4 0 0 1 5.64 0l1.42-1.42Zm2.83-2.83a10 10 0 0 0-14.14 0l1.41 1.41a8 8 0 0 1 11.32 0l1.41-1.41Z"/></svg>
-              </span>
-              <div class="voice-conn-text">
-                <span class="voice-conn-title" id="voice-conn-title">Ses Bağlantısı Kuruldu</span>
-                <span class="voice-conn-channel" id="voice-conn-channel">—</span>
-              </div>
-            </div>
-            <div class="voice-conn-actions">
-              <span class="voice-ping" id="voice-ping" title="Gecikme">—</span>
-              <button class="voice-conn-btn" id="vc-leave" title="Ayrıl" aria-label="Ayrıl">
-                <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M6.6 10.8a15.5 15.5 0 0 0 6.6 6.6l2.2-2.2c.3-.3.7-.4 1.1-.2 1.2.4 2.5.6 3.8.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.7 21 3 13.3 3 3c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.6.6 3.8.1.4 0 .8-.3 1.1L6.6 10.8Z"/></svg>
-              </button>
+    </aside>
+
+    <!-- Sol alt yüzen panel (rail + sidebar üzerinde) -->
+    <div class="sidebar-footer" id="sidebar-footer">
+      <div class="voice-conn hidden" id="voice-conn">
+        <div class="voice-conn-top">
+          <div class="voice-conn-status">
+            <span class="voice-conn-signal" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 20a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Zm4.24-3.76a6 6 0 0 0-8.48 0l1.42 1.42a4 4 0 0 1 5.64 0l1.42-1.42Zm2.83-2.83a10 10 0 0 0-14.14 0l1.41 1.41a8 8 0 0 1 11.32 0l1.41-1.41Z"/></svg>
+            </span>
+            <div class="voice-conn-text">
+              <span class="voice-conn-title" id="voice-conn-title">Ses Bağlantısı Kuruldu</span>
+              <span class="voice-conn-channel" id="voice-conn-channel">—</span>
             </div>
           </div>
-          <div class="voice-conn-tools">
-            <button class="voice-tool-btn" id="vc-cam" title="Kamera" aria-label="Kamera">
-              <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M4 6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h10l4 3V5L14 8H4Z"/></svg>
-            </button>
-            <button class="voice-tool-btn" id="vc-screen" title="Ekran paylaş" aria-label="Ekran paylaş">
-              <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M4 5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h7v2H8v2h8v-2h-3v-2h7a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2H4Zm6 3.5 5 3.5-5 3.5v-7Z"/></svg>
+          <div class="voice-conn-actions">
+            <span class="voice-ping" id="voice-ping" title="Gecikme">—</span>
+            <button class="voice-conn-btn" id="vc-leave" title="Ayrıl" aria-label="Ayrıl">
+              <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M6.6 10.8a15.5 15.5 0 0 0 6.6 6.6l2.2-2.2c.3-.3.7-.4 1.1-.2 1.2.4 2.5.6 3.8.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.7 21 3 13.3 3 3c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.6.6 3.8.1.4 0 .8-.3 1.1L6.6 10.8Z"/></svg>
             </button>
           </div>
         </div>
-
-        <!-- Kullanıcı paneli -->
-        <div class="user-panel">
-          <button class="user-panel-info" id="user-panel-info" type="button" title="Profil">
-            <span class="user-avatar-wrap">
-              <span class="user-avatar" id="user-avatar">?</span>
-              <span class="user-status-dot on" id="user-status-dot"></span>
-            </span>
-            <span class="user-meta">
-              <span class="user-name" id="user-name">—</span>
-              <span class="user-status-text" id="user-status-text">Çevrimiçi</span>
-            </span>
+        <div class="voice-conn-tools">
+          <button class="voice-tool-btn" id="vc-cam" title="Kamera" aria-label="Kamera">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M4 6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h10l4 3V5L14 8H4Z"/></svg>
           </button>
-          <div class="user-panel-controls">
-            <button class="user-ctrl-btn" id="vc-mic" title="Mikrofon" aria-label="Mikrofon">
-              <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V20H9v2h6v-2h-2v-2.08A7 7 0 0 0 19 11h-2Z"/></svg>
-            </button>
-            <button class="user-ctrl-btn" id="vc-deafen" title="Kulaklık" aria-label="Kulaklık">
-              <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 3a9 9 0 0 0-9 9v4a3 3 0 0 0 3 3h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H5.07A7 7 0 0 1 12 5a7 7 0 0 1 6.93 6H17a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h1a3 3 0 0 0 3-3v-4a9 9 0 0 0-9-9Z"/></svg>
-            </button>
-            <button class="user-ctrl-btn" id="btn-user-settings" title="Ayarlar" aria-label="Ayarlar">
-              <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="m19.14 12.94.94-.73a.5.5 0 0 0 .12-.64l-1.78-3.08a.5.5 0 0 0-.6-.22l-1.1.44a6.9 6.9 0 0 0-1.13-.65l-.17-1.18a.5.5 0 0 0-.5-.42h-3.56a.5.5 0 0 0-.5.42l-.17 1.18c-.4.16-.78.38-1.13.65l-1.1-.44a.5.5 0 0 0-.6.22L4.6 11.57a.5.5 0 0 0 .12.64l.94.73a5.7 5.7 0 0 0 0 1.32l-.94.73a.5.5 0 0 0-.12.64l1.78 3.08a.5.5 0 0 0 .6.22l1.1-.44c.35.27.73.49 1.13.65l.17 1.18a.5.5 0 0 0 .5.42h3.56a.5.5 0 0 0 .5-.42l.17-1.18c.4-.16.78-.38 1.13-.65l1.1.44a.5.5 0 0 0 .6-.22l1.78-3.08a.5.5 0 0 0-.12-.64l-.94-.73a5.7 5.7 0 0 0 0-1.32ZM12 15.5A3.5 3.5 0 1 1 15.5 12 3.5 3.5 0 0 1 12 15.5Z"/></svg>
-            </button>
-          </div>
+          <button class="voice-tool-btn" id="vc-screen" title="Ekran paylaş" aria-label="Ekran paylaş">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M4 5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h7v2H8v2h8v-2h-3v-2h7a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2H4Zm6 3.5 5 3.5-5 3.5v-7Z"/></svg>
+          </button>
         </div>
       </div>
-    </aside>
+
+      <div class="user-panel">
+        <button class="user-panel-info" id="user-panel-info" type="button" title="Profil">
+          <span class="user-avatar-wrap">
+            <span class="user-avatar" id="user-avatar">?</span>
+            <span class="user-status-dot on" id="user-status-dot"></span>
+          </span>
+          <span class="user-meta">
+            <span class="user-name" id="user-name">—</span>
+            <span class="user-status-text" id="user-status-text">Çevrimiçi</span>
+          </span>
+        </button>
+        <div class="user-panel-controls">
+          <button class="user-ctrl-btn" id="vc-mic" title="Mikrofon" aria-label="Mikrofon">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V20H9v2h6v-2h-2v-2.08A7 7 0 0 0 19 11h-2Z"/></svg>
+          </button>
+          <button class="user-ctrl-btn" id="vc-deafen" title="Kulaklık" aria-label="Kulaklık">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 3a9 9 0 0 0-9 9v4a3 3 0 0 0 3 3h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H5.07A7 7 0 0 1 12 5a7 7 0 0 1 6.93 6H17a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h1a3 3 0 0 0 3-3v-4a9 9 0 0 0-9-9Z"/></svg>
+          </button>
+          <button class="user-ctrl-btn" id="btn-settings" title="Ayarlar" aria-label="Ayarlar">
+            <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="m19.14 12.94.94-.73a.5.5 0 0 0 .12-.64l-1.78-3.08a.5.5 0 0 0-.6-.22l-1.1.44a6.9 6.9 0 0 0-1.13-.65l-.17-1.18a.5.5 0 0 0-.5-.42h-3.56a.5.5 0 0 0-.5.42l-.17 1.18c-.4.16-.78.38-1.13.65l-1.1-.44a.5.5 0 0 0-.6.22L4.6 11.57a.5.5 0 0 0 .12.64l.94.73a5.7 5.7 0 0 0 0 1.32l-.94.73a.5.5 0 0 0-.12.64l1.78 3.08a.5.5 0 0 0 .6.22l1.1-.44c.35.27.73.49 1.13.65l.17 1.18a.5.5 0 0 0 .5.42h3.56a.5.5 0 0 0 .5-.42l.17-1.18c.4-.16.78-.38 1.13-.65l1.1.44a.5.5 0 0 0 .6-.22l1.78-3.08a.5.5 0 0 0-.12-.64l-.94-.73a5.7 5.7 0 0 0 0-1.32ZM12 15.5A3.5 3.5 0 1 1 15.5 12 3.5 3.5 0 0 1 12 15.5Z"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
 
     <!-- Ana içerik -->
     <main class="main" id="main">

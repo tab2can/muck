@@ -203,7 +203,6 @@ function renderRail() {
 
 function setRailActive(target) {
   $('btn-home').classList.toggle('active', target === 'home');
-  $('btn-settings').classList.toggle('active', target === 'settings');
   document.querySelectorAll('.rail-server').forEach((el) => el.classList.remove('active'));
 }
 
@@ -702,11 +701,13 @@ function showVoiceFooter(channelName) {
   $('voice-conn').classList.remove('hidden');
   $('voice-conn-channel').textContent = channelName || '—';
   $('voice-conn-title').textContent = 'Ses Bağlantısı Kuruldu';
+  $('app').classList.add('voice-connected');
   startPingMonitor();
 }
 
 function hideVoiceFooter() {
   $('voice-conn').classList.add('hidden');
+  $('app').classList.remove('voice-connected');
   stopPingMonitor();
   const ping = $('voice-ping');
   ping.textContent = '—';
@@ -808,7 +809,6 @@ $('vc-deafen').addEventListener('click', () => {
 $('vc-cam').addEventListener('click', () => voiceManager?.toggleCamera());
 $('vc-screen').addEventListener('click', () => voiceManager?.toggleScreen());
 $('vc-leave').addEventListener('click', () => leaveVoiceChannel());
-$('btn-user-settings').addEventListener('click', openSettings);
 $('user-panel-info').addEventListener('click', openSettings);
 
 /* ================= Server modals ================= */
