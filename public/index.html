@@ -155,11 +155,10 @@
       </div>
     </div>
 
-    <!-- Ana içerik -->
-    <main class="main" id="main">
-      <!-- Arkadaşlar (@me) -->
-      <div id="view-friends" class="main-view hidden">
-        <div class="friends-head">
+    <!-- Ana içerik + sağ panel (üst bar ortak) -->
+    <section class="workspace" id="workspace">
+      <div class="workspace-head" id="workspace-head">
+        <div id="head-friends" class="view-head friends-head hidden">
           <div class="friends-head-title">
             <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M15 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4Zm-6 0a3.5 3.5 0 1 0-3.5-3.5A3.5 3.5 0 0 0 9 12Zm0 2c-2.7 0-6 1.34-6 4v2h8v-2c0-1 .46-1.9 1.2-2.6A9.6 9.6 0 0 0 9 14Zm6 0c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4Z"/></svg>
             <span>Arkadaşlar</span>
@@ -171,93 +170,104 @@
             <button type="button" class="friends-tab friends-tab--add" data-friends-tab="add">Ekle</button>
           </div>
         </div>
-        <div class="friends-body">
-          <div class="friends-search-wrap">
-            <input type="search" id="friends-search" class="friends-search" placeholder="Ara" autocomplete="off" />
-          </div>
-          <div class="friends-section-label" id="friends-list-label">Çevrimiçi — 0</div>
-          <ul class="friends-main-list" id="friends-main-list"></ul>
-          <p class="friends-empty-hint hidden" id="friends-main-empty">Burada kimse yok.</p>
-
-          <div id="friends-add-panel" class="friends-add-panel hidden">
-            <h3>Arkadaş ekle</h3>
-            <p>Kullanıcı adını yazarak arkadaşlık isteği gönder.</p>
-            <form id="friends-add-form" class="friends-add-form">
-              <input id="friends-add-input" type="text" placeholder="Kullanıcı adı" autocomplete="off" maxlength="20" />
-              <button type="submit" class="btn btn-primary">İstek Gönder</button>
-            </form>
-            <p class="friends-add-status" id="friends-add-status"></p>
-          </div>
-        </div>
-      </div>
-
-      <!-- Boş durum -->
-      <div id="view-empty" class="main-empty hidden">
-        <img src="/icon.png" alt="" class="main-empty-icon" />
-        <h2>Muck</h2>
-        <p id="empty-hint">Bir arkadaş seç veya sunucuya katıl.</p>
-      </div>
-
-      <!-- Metin sohbet -->
-      <div id="view-chat" class="main-view hidden">
-        <div class="chat-head"><span id="chat-title"># genel</span></div>
-        <div class="chat-messages" id="chat-messages"></div>
-        <form class="chat-input" id="chat-form">
-          <input id="chat-input" type="text" placeholder="Mesaj yaz…" autocomplete="off" maxlength="2000" />
-          <button type="submit" class="btn btn-primary btn-send" aria-label="Gönder">
-            <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M3.4 20.6 21 12 3.4 3.4l2.8 7.2L16 12l-9.8 1.4-2.8 7.2Z"/></svg>
-          </button>
-        </form>
-      </div>
-
-      <!-- DM sohbet -->
-      <div id="view-dm" class="main-view hidden">
-        <div class="chat-head"><span id="dm-title">@ kullanıcı</span></div>
-        <div class="chat-messages" id="dm-messages"></div>
-        <form class="chat-input" id="dm-form">
-          <input id="dm-input" type="text" placeholder="Mesaj yaz…" autocomplete="off" maxlength="2000" />
-          <button type="submit" class="btn btn-primary btn-send" aria-label="Gönder">
-            <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M3.4 20.6 21 12 3.4 3.4l2.8 7.2L16 12l-9.8 1.4-2.8 7.2Z"/></svg>
-          </button>
-        </form>
-        <div id="dm-blocked-bar" class="dm-blocked-bar hidden">
-          <span id="dm-blocked-text">Engellediğin bir kullanıcıya mesaj gönderemezsin.</span>
-          <button type="button" class="btn btn-secondary" id="dm-unblock-btn">Engeli kaldır</button>
-        </div>
-      </div>
-
-      <!-- Ses kanalı -->
-      <div id="view-voice" class="main-view hidden">
-        <div class="voice-head">
+        <div id="head-chat" class="view-head chat-head hidden"><span id="chat-title"># genel</span></div>
+        <div id="head-dm" class="view-head chat-head hidden"><span id="dm-title">@ kullanıcı</span></div>
+        <div id="head-voice" class="view-head voice-head hidden">
           <span id="voice-title">Sesli</span>
           <span class="voice-count" id="voice-count">0 katılımcı</span>
         </div>
-        <div class="voice-grid" id="voice-grid"></div>
+        <div id="head-empty" class="view-head chat-head hidden"><span id="empty-head-title">Muck</span></div>
       </div>
 
-    </main>
+      <div class="workspace-body">
+        <main class="main" id="main">
+          <!-- Arkadaşlar (@me) -->
+          <div id="view-friends" class="main-view hidden">
+            <div class="friends-body">
+              <div class="friends-search-wrap">
+                <input type="search" id="friends-search" class="friends-search" placeholder="Ara" autocomplete="off" />
+              </div>
+              <div class="friends-section-label" id="friends-list-label">Çevrimiçi — 0</div>
+              <ul class="friends-main-list" id="friends-main-list"></ul>
+              <p class="friends-empty-hint hidden" id="friends-main-empty">Burada kimse yok.</p>
 
-    <!-- Sağ panel: üyeler / DM profili -->
-    <aside class="panel" id="right-panel">
-      <!-- Sunucu üyeleri -->
-      <div id="panel-members" class="hidden">
-        <div class="panel-head">Üyeler — <span id="member-count">0</span></div>
-        <ul id="member-list" class="panel-list"></ul>
-      </div>
-      <!-- DM profili -->
-      <div id="panel-profile" class="hidden">
-        <div class="profile-banner"></div>
-        <div class="profile-body">
-          <span class="profile-avatar" id="profile-avatar">?</span>
-          <div class="profile-name" id="profile-name">—</div>
-          <div class="profile-status" id="profile-status"><span class="status-dot"></span><span id="profile-status-text">Çevrimdışı</span></div>
-          <div class="profile-card">
-            <div class="profile-card-label">Muck Üyesi</div>
-            <div class="profile-card-value" id="profile-username">—</div>
+              <div id="friends-add-panel" class="friends-add-panel hidden">
+                <h3>Arkadaş ekle</h3>
+                <p>Kullanıcı adını yazarak arkadaşlık isteği gönder.</p>
+                <form id="friends-add-form" class="friends-add-form">
+                  <input id="friends-add-input" type="text" placeholder="Kullanıcı adı" autocomplete="off" maxlength="20" />
+                  <button type="submit" class="btn btn-primary">İstek Gönder</button>
+                </form>
+                <p class="friends-add-status" id="friends-add-status"></p>
+              </div>
+            </div>
           </div>
-        </div>
+
+          <!-- Boş durum -->
+          <div id="view-empty" class="main-empty hidden">
+            <img src="/icon.png" alt="" class="main-empty-icon" />
+            <h2>Muck</h2>
+            <p id="empty-hint">Bir arkadaş seç veya sunucuya katıl.</p>
+          </div>
+
+          <!-- Metin sohbet -->
+          <div id="view-chat" class="main-view hidden">
+            <div class="chat-messages" id="chat-messages"></div>
+            <form class="chat-input" id="chat-form">
+              <input id="chat-input" type="text" placeholder="Mesaj yaz…" autocomplete="off" maxlength="2000" />
+              <button type="submit" class="btn btn-primary btn-send" aria-label="Gönder">
+                <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M3.4 20.6 21 12 3.4 3.4l2.8 7.2L16 12l-9.8 1.4-2.8 7.2Z"/></svg>
+              </button>
+            </form>
+          </div>
+
+          <!-- DM sohbet -->
+          <div id="view-dm" class="main-view hidden">
+            <div class="chat-messages" id="dm-messages"></div>
+            <form class="chat-input" id="dm-form">
+              <input id="dm-input" type="text" placeholder="Mesaj yaz…" autocomplete="off" maxlength="2000" />
+              <button type="submit" class="btn btn-primary btn-send" aria-label="Gönder">
+                <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M3.4 20.6 21 12 3.4 3.4l2.8 7.2L16 12l-9.8 1.4-2.8 7.2Z"/></svg>
+              </button>
+            </form>
+            <div id="dm-blocked-bar" class="dm-blocked-bar hidden">
+              <span id="dm-blocked-text">Engellediğin bir kullanıcıya mesaj gönderemezsin.</span>
+              <button type="button" class="btn btn-secondary" id="dm-unblock-btn">Engeli kaldır</button>
+            </div>
+          </div>
+
+          <!-- Ses kanalı -->
+          <div id="view-voice" class="main-view hidden">
+            <div class="voice-grid" id="voice-grid"></div>
+          </div>
+        </main>
+
+        <!-- Sağ panel -->
+        <aside class="panel" id="right-panel">
+          <div id="panel-active" class="hidden">
+            <div class="active-now-title">Şimdi Aktif</div>
+            <div id="active-now-list" class="active-now-list"></div>
+            <p id="active-now-empty" class="active-now-empty">Şu an sesli sohbette kimse yok.</p>
+          </div>
+          <div id="panel-members" class="hidden">
+            <div class="panel-section-title">Üyeler — <span id="member-count">0</span></div>
+            <ul id="member-list" class="panel-list"></ul>
+          </div>
+          <div id="panel-profile" class="hidden">
+            <div class="profile-banner"></div>
+            <div class="profile-body">
+              <span class="profile-avatar" id="profile-avatar">?</span>
+              <div class="profile-name" id="profile-name">—</div>
+              <div class="profile-status" id="profile-status"><span class="status-dot"></span><span id="profile-status-text">Çevrimdışı</span></div>
+              <div class="profile-card">
+                <div class="profile-card-label">Muck Üyesi</div>
+                <div class="profile-card-value" id="profile-username">—</div>
+              </div>
+            </div>
+          </div>
+        </aside>
       </div>
-    </aside>
+    </section>
 
     <!-- Mobil dokunma katmanı (drawer'ları kapatmak için) -->
     <div class="scrim" id="scrim"></div>

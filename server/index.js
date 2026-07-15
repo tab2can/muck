@@ -175,9 +175,58 @@ function getVoiceList(channelId) {
   }));
 }
 
+function findUserVoice(userId) {
+  for (const [channelId, map] of voiceParticipants) {
+    for (const v of map.values()) {
+      if (v.userId === userId) {
+        const found = store.findChannel(channelId);
+        if (!found) return null;
+        return {
+          channelId,
+          channelName: found.channel.name,
+          serverId: found.server.id,
+          serverName: found.server.name,
+          participants: getVoiceList(channelId),
+        };
+      }
+    }
+  }
+  return null;
+}
+
+function friendsVoiceSnapshot(forUserId) {
+  const out = {};
+  for (const f of store.getFriends(forUserId)) {
+    const loc = findUserVoice(f.id);
+    if (loc) {
+      out[f.id] = {
+        userId: f.id,
+        username: f.username,
+        ...loc,
+      };
+    }
+  }
+  return out;
+}
+
+function emitFriendsVoice(forUserId) {
+  const sockets = onlineUsers.get(forUserId);
+  if (!sockets) return;
+  const payload = friendsVoiceSnapshot(forUserId);
+  for (const sid of sockets) io.to(sid).emit('friends-voice', { activities: payload });
+}
+
+function notifyFriendsVoiceOfUser(userId) {
+  const user = store.findById(userId);
+  if (!user) return;
+  // Kullanıcının arkadaşlarına kendi ses durumunu yansıt
+  for (const friendId of user.friends || []) emitFriendsVoice(friendId);
+  // Kendine de güncel liste
+  emitFriendsVoice(userId);
+}
+
 function broadcastVoicePresence(channelId) {
   io.to(`voice:${channelId}`).emit('voice-presence', { channelId, participants: getVoiceList(channelId) });
-  // Sunucu üyelerine de bildir (sidebar'da göstermek için)
   const found = store.findChannel(channelId);
   if (found) {
     for (const memberId of found.server.members) {
@@ -185,20 +234,29 @@ function broadcastVoicePresence(channelId) {
       if (sockets) for (const sid of sockets) io.to(sid).emit('voice-presence', { channelId, participants: getVoiceList(channelId) });
     }
   }
+  // Kanaldaki herkesin arkadaşlarına Şimdi Aktif güncelle
+  const seen = new Set();
+  for (const p of getVoiceList(channelId)) {
+    if (seen.has(p.userId)) continue;
+    seen.add(p.userId);
+    notifyFriendsVoiceOfUser(p.userId);
+  }
 }
 
 function leaveVoice(socket) {
   const channelId = socket.data.voiceChannelId;
   if (!channelId) return;
+  const uid = socket.data.userId;
   const map = voiceParticipants.get(channelId);
   if (map) {
     map.delete(socket.id);
     if (map.size === 0) voiceParticipants.delete(channelId);
   }
-  socket.to(`voice:${channelId}`).emit('voice-peer-left', { userId: socket.data.userId, socketId: socket.id });
+  socket.to(`voice:${channelId}`).emit('voice-peer-left', { userId: uid, socketId: socket.id });
   socket.leave(`voice:${channelId}`);
   socket.data.voiceChannelId = null;
   broadcastVoicePresence(channelId);
+  notifyFriendsVoiceOfUser(uid);
 }
 
 io.use((socket, next) => {
@@ -221,6 +279,7 @@ io.on('connection', (socket) => {
     friendRequests: store.getFriendRequests(userId),
     social: store.getSocial(userId),
     servers: store.getUserServers(userId),
+    friendsVoice: friendsVoiceSnapshot(userId),
   });
   if (wasOffline) notifyFriendsOfChange(userId);
 

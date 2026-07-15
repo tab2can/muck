@@ -145,30 +145,99 @@ function setMainView(view) {
   ['view-friends', 'view-empty', 'view-chat', 'view-dm', 'view-voice'].forEach((id) => $(id).classList.add('hidden'));
   if (view === 'empty') $('view-empty').classList.remove('hidden');
   else $(`view-${view}`)?.classList.remove('hidden');
+
+  ['friends', 'chat', 'dm', 'voice', 'empty'].forEach((v) => {
+    $(`head-${v}`)?.classList.toggle('hidden', v !== view);
+  });
+
   $('btn-friends-nav')?.classList.toggle('active', view === 'friends' && !activeDmFriendId);
   updatePanel();
 }
 
-/* ================= Right panel (üyeler / profil) ================= */
+/* ================= Right panel (üyeler / profil / şimdi aktif) ================= */
 function updatePanel() {
   const app = $('app');
   const members = $('panel-members');
   const profile = $('panel-profile');
-  if (activeServer && (activeView === 'chat' || activeView === 'voice' || activeView === 'empty')) {
+  const active = $('panel-active');
+  members?.classList.add('hidden');
+  profile?.classList.add('hidden');
+  active?.classList.add('hidden');
+
+  if (activeView === 'friends') {
+    renderActiveNow();
+    active?.classList.remove('hidden');
+    app.classList.add('with-panel');
+  } else if (activeServer && (activeView === 'chat' || activeView === 'voice' || activeView === 'empty')) {
     renderMembers();
-    members.classList.remove('hidden');
-    profile.classList.add('hidden');
+    members?.classList.remove('hidden');
     app.classList.add('with-panel');
   } else if (activeView === 'dm' && activeDmFriendId) {
     renderProfile();
-    profile.classList.remove('hidden');
-    members.classList.add('hidden');
+    profile?.classList.remove('hidden');
     app.classList.add('with-panel');
   } else {
-    members.classList.add('hidden');
-    profile.classList.add('hidden');
     app.classList.remove('with-panel');
   }
+}
+
+let friendsVoice = {}; // userId -> activity
+
+function renderActiveNow() {
+  const list = $('active-now-list');
+  const empty = $('active-now-empty');
+  if (!list) return;
+  list.innerHTML = '';
+
+  // Aynı kanalda birden fazla arkadaş varsa kartları kanal bazında birleştir
+  const byChannel = new Map();
+  for (const act of Object.values(friendsVoice || {})) {
+    if (!act?.channelId) continue;
+    if (!byChannel.has(act.channelId)) byChannel.set(act.channelId, act);
+  }
+
+  for (const act of byChannel.values()) {
+    const friendIds = new Set(
+      (act.participants || [])
+        .map((p) => p.userId)
+        .filter((id) => id !== currentUser?.id && friends.some((f) => f.id === id))
+    );
+    // Tek arkadaş yoksa ama snapshot’ta kayıt varsa yine göster
+    const names = [...friendIds]
+      .map((id) => friends.find((f) => f.id === id)?.username || friendsVoice[id]?.username)
+      .filter(Boolean);
+    if (!names.length && act.username) names.push(act.username);
+    if (!names.length) continue;
+
+    const title = names.length <= 2
+      ? names.join(' ve ')
+      : `${names.slice(0, 2).join(', ')} +${names.length - 2}`;
+
+    const peers = (act.participants || [])
+      .filter((p) => p.userId !== currentUser?.id)
+      .slice(0, 4);
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'active-card';
+    btn.innerHTML = `
+      <span class="user-chip-avatar user-chip-avatar--md">${escapeHtml(initials(names[0]))}
+        <span class="user-chip-dot on"></span>
+      </span>
+      <span class="active-card-body">
+        <div class="active-card-title">${escapeHtml(title)}</div>
+        <div class="active-card-sub">${escapeHtml(act.serverName)} · ${escapeHtml(act.channelName)}</div>
+      </span>
+      <span class="active-card-peers">
+        ${peers.map((p) => `<span class="active-card-peer" title="${escapeHtml(p.username)}">${escapeHtml(initials(p.username))}</span>`).join('')}
+      </span>`;
+    btn.addEventListener('click', () => {
+      selectServer(act.serverId, act.channelId, true);
+    });
+    list.appendChild(btn);
+  }
+
+  empty?.classList.toggle('hidden', list.children.length > 0);
 }
 
 function renderMembers() {
@@ -2040,11 +2109,12 @@ function connectSocket(token) {
     if (err.message === 'unauthorized') { deleteCookie('muck_token'); showAuth(); }
   });
 
-  socket.on('init', ({ user, friends: fr, friendRequests: frReq, servers: srv, social: soc }) => {
+  socket.on('init', ({ user, friends: fr, friendRequests: frReq, servers: srv, social: soc, friendsVoice: fv }) => {
     currentUser = user;
     friends = fr || [];
     friendRequests = frReq || { incoming: [], outgoing: [] };
     social = soc || social;
+    friendsVoice = fv || {};
     servers = srv;
     $('user-name').textContent = user.username;
     $('user-avatar').textContent = initials(user.username);
@@ -2149,6 +2219,11 @@ function connectSocket(token) {
   socket.on('voice-peer-left', ({ socketId }) => {
     voiceManager?.onPeerLeft(socketId);
   });
+  socket.on('friends-voice', ({ activities }) => {
+    friendsVoice = activities || {};
+    if (activeView === 'friends') renderActiveNow();
+  });
+
   socket.on('voice-presence', ({ channelId, participants }) => {
     voicePresence[channelId] = participants;
     if (activeServer) renderChannels();
