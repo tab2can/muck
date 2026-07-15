@@ -220,15 +220,7 @@ html[data-theme="light"] .voice-conn { background: #e8ebf2; }
   display: flex; align-items: center; gap: .35rem;
   padding: .45rem .5rem;
   min-height: 52px;
-  background:
-    radial-gradient(120% 140% at 10% 0%, rgba(232, 140, 60, .22), transparent 55%),
-    linear-gradient(180deg, rgba(40, 32, 24, .55), transparent 70%),
-    var(--bg-2);
-}
-html[data-theme="light"] .user-panel {
-  background:
-    radial-gradient(120% 140% at 10% 0%, rgba(232, 140, 60, .18), transparent 55%),
-    var(--bg-2);
+  background: var(--bg-2);
 }
 .user-panel-info {
   flex: 1; min-width: 0;
