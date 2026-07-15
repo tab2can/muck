@@ -7,7 +7,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_FILE = path.join(__dirname, 'data.json');
 const MAX_MESSAGES = 200;
 
-let data = { users: {}, tokens: {}, servers: {}, messages: {}, dms: {}, dmChannels: {} };
+let data = { users: {}, tokens: {}, servers: {}, messages: {}, dms: {}, dmChannels: {}, friendRequests: {} };
 
 function load() {
   try {
@@ -19,6 +19,7 @@ function load() {
       if (!data.messages) data.messages = {};
       if (!data.dms) data.dms = {};
       if (!data.dmChannels) data.dmChannels = {};
+      if (!data.friendRequests) data.friendRequests = {};
       for (const u of Object.values(data.users)) {
         if (!u.friends) u.friends = [];
         if (!u.servers) u.servers = [];
@@ -27,7 +28,7 @@ function load() {
     }
   } catch (err) {
     console.error('data.json okunamadı:', err.message);
-    data = { users: {}, tokens: {}, servers: {}, messages: {}, dms: {}, dmChannels: {} };
+    data = { users: {}, tokens: {}, servers: {}, messages: {}, dms: {}, dmChannels: {}, friendRequests: {} };
   }
 }
 
@@ -163,16 +164,80 @@ export function publicUser(user) {
 
 // ---- Friends ----
 export function addFriend(userId, friendUsername) {
+  // Geriye dönük: doğrudan arkadaş eklemek yerine istek gönder.
+  return sendFriendRequest(userId, friendUsername);
+}
+
+export function sendFriendRequest(userId, friendUsername) {
   const user = findById(userId);
   if (!user) return { error: 'Oturum geçersiz.' };
   const friend = findByUsername(friendUsername);
   if (!friend) return { error: 'Kullanıcı bulunamadı.' };
-  if (friend.id === userId) return { error: 'Kendinizi ekleyemezsiniz.' };
+  if (friend.id === userId) return { error: 'Kendinize istek gönderemezsiniz.' };
   if (user.friends.includes(friend.id)) return { error: 'Bu kişi zaten arkadaş listenizde.' };
-  user.friends.push(friend.id);
-  friend.friends.push(user.id);
+
+  // Karşı tarafın size bekleyen isteği varsa otomatik kabul et.
+  const reverse = Object.values(data.friendRequests).find(
+    (r) => r.fromId === friend.id && r.toId === userId
+  );
+  if (reverse) {
+    return acceptFriendRequest(userId, reverse.id);
+  }
+
+  const existing = Object.values(data.friendRequests).find(
+    (r) => (r.fromId === userId && r.toId === friend.id) || (r.fromId === friend.id && r.toId === userId)
+  );
+  if (existing) return { error: 'Zaten bekleyen bir arkadaşlık isteği var.' };
+
+  const id = snowflake();
+  const request = { id, fromId: userId, toId: friend.id, createdAt: Date.now() };
+  data.friendRequests[id] = request;
   save();
-  return { friend };
+  return {
+    request,
+    from: { id: user.id, username: user.username },
+    to: { id: friend.id, username: friend.username },
+  };
+}
+
+export function acceptFriendRequest(userId, requestId) {
+  const req = data.friendRequests[requestId];
+  if (!req) return { error: 'İstek bulunamadı.' };
+  if (req.toId !== userId) return { error: 'Bu isteği kabul edemezsiniz.' };
+  const user = findById(userId);
+  const other = findById(req.fromId);
+  if (!user || !other) return { error: 'Kullanıcı bulunamadı.' };
+
+  if (!user.friends.includes(other.id)) user.friends.push(other.id);
+  if (!other.friends.includes(user.id)) other.friends.push(user.id);
+  delete data.friendRequests[requestId];
+  // İkisinin diğer yönlü bekleyen isteklerini de temizle
+  for (const [id, r] of Object.entries(data.friendRequests)) {
+    if (
+      (r.fromId === userId && r.toId === other.id) ||
+      (r.fromId === other.id && r.toId === userId)
+    ) {
+      delete data.friendRequests[id];
+    }
+  }
+  save();
+  return {
+    friend: other,
+    fromId: req.fromId,
+    toId: req.toId,
+  };
+}
+
+export function declineFriendRequest(userId, requestId) {
+  const req = data.friendRequests[requestId];
+  if (!req) return { error: 'İstek bulunamadı.' };
+  // Alıcı reddeder veya gönderen iptal eder
+  if (req.toId !== userId && req.fromId !== userId) {
+    return { error: 'Bu isteği silemezsiniz.' };
+  }
+  delete data.friendRequests[requestId];
+  save();
+  return { success: true, request: req };
 }
 
 export function removeFriend(userId, friendId) {
@@ -188,6 +253,21 @@ export function getFriends(userId) {
   const user = findById(userId);
   if (!user) return [];
   return user.friends.map((id) => findById(id)).filter(Boolean).map((f) => ({ id: f.id, username: f.username }));
+}
+
+export function getFriendRequests(userId) {
+  const incoming = [];
+  const outgoing = [];
+  for (const r of Object.values(data.friendRequests)) {
+    if (r.toId === userId) {
+      const from = findById(r.fromId);
+      if (from) incoming.push({ id: r.id, user: { id: from.id, username: from.username }, createdAt: r.createdAt });
+    } else if (r.fromId === userId) {
+      const to = findById(r.toId);
+      if (to) outgoing.push({ id: r.id, user: { id: to.id, username: to.username }, createdAt: r.createdAt });
+    }
+  }
+  return { incoming, outgoing };
 }
 
 // ---- Servers ----

@@ -7,9 +7,11 @@ const THEME_COLORS = { dark: '#0f1117', black: '#000000', light: '#f3f5f9' };
 let socket = null;
 let currentUser = null;
 let friends = [];
+let friendRequests = { incoming: [], outgoing: [] };
+let friendsTab = 'online'; // online | all | pending | add
 let servers = [];
 let activeServer = null; // full server object from get-server
-let activeView = 'empty'; // empty | chat | dm | voice | settings
+let activeView = 'friends'; // friends | empty | chat | dm | voice | settings
 let activeChannelId = null;
 let activeDmFriendId = null;
 let activeDmChannelId = null;
@@ -122,9 +124,10 @@ function showAuth() { $('auth-view').classList.remove('hidden'); $('app').classL
 
 function setMainView(view) {
   activeView = view;
-  ['view-empty', 'view-chat', 'view-dm', 'view-voice'].forEach((id) => $(id).classList.add('hidden'));
-  if (view !== 'empty') $(`view-${view}`).classList.remove('hidden');
-  else $('view-empty').classList.remove('hidden');
+  ['view-friends', 'view-empty', 'view-chat', 'view-dm', 'view-voice'].forEach((id) => $(id).classList.add('hidden'));
+  if (view === 'empty') $('view-empty').classList.remove('hidden');
+  else $(`view-${view}`)?.classList.remove('hidden');
+  $('btn-friends-nav')?.classList.toggle('active', view === 'friends' && !activeDmFriendId);
   updatePanel();
 }
 
@@ -211,7 +214,7 @@ function showSidebarHome() {
   $('sidebar-home').classList.remove('hidden');
   $('sidebar-server').classList.add('hidden');
   $('sidebar-title').textContent = 'Ana Sayfa';
-  $('btn-add-friend').classList.remove('hidden');
+  $('btn-add-friend-head')?.classList.add('hidden');
   $('btn-server-settings').classList.add('hidden');
   setRailActive('home');
 }
@@ -220,17 +223,33 @@ function showSidebarServer() {
   $('sidebar-home').classList.add('hidden');
   $('sidebar-server').classList.remove('hidden');
   $('sidebar-title').textContent = activeServer?.name || 'Sunucu';
-  $('btn-add-friend').classList.add('hidden');
+  $('btn-add-friend-head')?.classList.add('hidden');
   $('btn-server-settings').classList.toggle('hidden', activeServer?.ownerId !== currentUser?.id);
   document.querySelectorAll('.rail-server').forEach((el) => {
     el.classList.toggle('active', el.title === activeServer?.name);
   });
 }
 
+function pendingCount() {
+  return friendRequests?.incoming?.length || 0;
+}
+
+function updateFriendsBadge() {
+  const n = pendingCount();
+  for (const id of ['friends-badge', 'pending-tab-badge']) {
+    const el = $(id);
+    if (!el) continue;
+    el.textContent = String(n);
+    el.classList.toggle('hidden', n <= 0);
+  }
+}
+
 function renderFriends() {
-  const list = $('friends-list');
+  // Sidebar: Direkt Mesajlar = arkadaş listesi
+  const list = $('dm-list');
+  if (!list) return;
   list.innerHTML = '';
-  const sorted = [...friends].sort((a, b) => Number(b.online) - Number(a.online));
+  const sorted = [...friends].sort((a, b) => Number(b.online) - Number(a.online) || a.username.localeCompare(b.username));
   for (const f of sorted) {
     const li = document.createElement('li');
     const btn = document.createElement('button');
@@ -240,7 +259,155 @@ function renderFriends() {
     li.appendChild(btn);
     list.appendChild(li);
   }
-  $('friends-empty').classList.toggle('hidden', friends.length > 0);
+  $('dm-empty')?.classList.toggle('hidden', friends.length > 0);
+  updateFriendsBadge();
+  if (activeView === 'friends') renderFriendsMain();
+}
+
+function setFriendsTab(tab) {
+  friendsTab = tab;
+  document.querySelectorAll('.friends-tab').forEach((el) => {
+    el.classList.toggle('active', el.dataset.friendsTab === tab);
+  });
+  const addPanel = $('friends-add-panel');
+  const searchWrap = $('friends-search')?.parentElement;
+  const list = $('friends-main-list');
+  const label = $('friends-list-label');
+  const empty = $('friends-main-empty');
+  const isAdd = tab === 'add';
+  addPanel?.classList.toggle('hidden', !isAdd);
+  searchWrap?.classList.toggle('hidden', isAdd);
+  list?.classList.toggle('hidden', isAdd);
+  label?.classList.toggle('hidden', isAdd);
+  empty?.classList.toggle('hidden', isAdd);
+  if (!isAdd) renderFriendsMain();
+  else {
+    $('friends-add-status').textContent = '';
+    $('friends-add-status').className = 'friends-add-status';
+    $('friends-add-input')?.focus();
+  }
+}
+
+function renderFriendsMain() {
+  const list = $('friends-main-list');
+  const label = $('friends-list-label');
+  const empty = $('friends-main-empty');
+  if (!list || friendsTab === 'add') return;
+
+  const q = ($('friends-search')?.value || '').trim().toLowerCase();
+  list.innerHTML = '';
+
+  if (friendsTab === 'pending') {
+    label.textContent = `Bekleyen — ${pendingCount() + (friendRequests.outgoing?.length || 0)}`;
+    for (const r of friendRequests.incoming || []) {
+      if (q && !r.user.username.toLowerCase().includes(q)) continue;
+      list.appendChild(makePendingRow(r, 'incoming'));
+    }
+    for (const r of friendRequests.outgoing || []) {
+      if (q && !r.user.username.toLowerCase().includes(q)) continue;
+      list.appendChild(makePendingRow(r, 'outgoing'));
+    }
+    empty.classList.toggle('hidden', list.children.length > 0);
+    empty.textContent = 'Bekleyen istek yok.';
+    return;
+  }
+
+  let rows = [...friends];
+  if (friendsTab === 'online') rows = rows.filter((f) => f.online);
+  if (q) rows = rows.filter((f) => f.username.toLowerCase().includes(q));
+  rows.sort((a, b) => Number(b.online) - Number(a.online) || a.username.localeCompare(b.username));
+
+  label.textContent = friendsTab === 'online'
+    ? `Çevrimiçi — ${rows.length}`
+    : `Tümü — ${rows.length}`;
+
+  for (const f of rows) {
+    const li = document.createElement('li');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'friend-row';
+    btn.innerHTML = `
+      <span class="friend-row-avatar">${escapeHtml(initials(f.username))}
+        <span class="status-dot ${f.online ? 'on' : ''}"></span>
+      </span>
+      <span class="friend-row-meta">
+        <span class="friend-row-name">${escapeHtml(f.username)}</span>
+        <span class="friend-row-sub">${f.online ? 'Çevrimiçi' : 'Çevrimdışı'}</span>
+      </span>`;
+    btn.addEventListener('click', () => openDM(f.id));
+    li.appendChild(btn);
+    list.appendChild(li);
+  }
+  empty.classList.toggle('hidden', rows.length > 0);
+  empty.textContent = friendsTab === 'online' ? 'Çevrimiçi arkadaş yok.' : 'Henüz arkadaşın yok.';
+}
+
+function makePendingRow(r, kind) {
+  const li = document.createElement('li');
+  const row = document.createElement('div');
+  row.className = 'friend-row';
+  row.style.cursor = 'default';
+  row.innerHTML = `
+    <span class="friend-row-avatar">${escapeHtml(initials(r.user.username))}</span>
+    <span class="friend-row-meta">
+      <span class="friend-row-name">${escapeHtml(r.user.username)}</span>
+      <span class="friend-row-sub">${kind === 'incoming' ? 'Gelen istek' : 'Giden istek'}</span>
+    </span>
+    <span class="friend-row-actions"></span>`;
+  const actions = row.querySelector('.friend-row-actions');
+  if (kind === 'incoming') {
+    const accept = document.createElement('button');
+    accept.className = 'friend-action accept';
+    accept.textContent = 'Kabul';
+    accept.addEventListener('click', () => {
+      socket.emit('friend-accept', { requestId: r.id }, (res) => {
+        if (res.error) { toast(res.error); return; }
+        if (res.friend) {
+          const idx = friends.findIndex((f) => f.id === res.friend.id);
+          if (idx >= 0) friends[idx] = res.friend; else friends.push(res.friend);
+        }
+        toast(`${r.user.username} arkadaş eklendi`);
+        renderFriends();
+      });
+    });
+    const decline = document.createElement('button');
+    decline.className = 'friend-action decline';
+    decline.textContent = 'Reddet';
+    decline.addEventListener('click', () => {
+      socket.emit('friend-decline', { requestId: r.id }, (res) => {
+        if (res.error) { toast(res.error); return; }
+        toast('İstek reddedildi');
+      });
+    });
+    actions.append(accept, decline);
+  } else {
+    const cancel = document.createElement('button');
+    cancel.className = 'friend-action decline';
+    cancel.textContent = 'İptal';
+    cancel.addEventListener('click', () => {
+      socket.emit('friend-decline', { requestId: r.id }, (res) => {
+        if (res.error) { toast(res.error); return; }
+        toast('İstek iptal edildi');
+      });
+    });
+    actions.append(cancel);
+  }
+  li.appendChild(row);
+  return li;
+}
+
+function openFriendsView(tab = friendsTab, push = true) {
+  activeServer = null;
+  activeChannelId = null;
+  activeDmFriendId = null;
+  activeDmChannelId = null;
+  showSidebarHome();
+  renderFriends();
+  setMainView('friends');
+  setFriendsTab(tab);
+  setRailActive('home');
+  closeDrawers();
+  if (push) navTo('/channels/@me');
 }
 
 function renderChannels() {
@@ -332,17 +499,7 @@ function makeVoiceUserRow(p) {
 
 /* ================= Navigation ================= */
 function goHome(push = true) {
-  activeServer = null;
-  activeChannelId = null;
-  activeDmFriendId = null;
-  activeDmChannelId = null;
-  showSidebarHome();
-  renderFriends();
-  setMainView('empty');
-  $('empty-hint').textContent = 'Bir arkadaş seç veya sunucuya katıl.';
-  setRailActive('home');
-  closeDrawers();
-  if (push) navTo('/channels/@me');
+  openFriendsView('online', push);
 }
 
 function openSettings() {
@@ -923,23 +1080,55 @@ $('btn-server-settings').addEventListener('click', () => {
 });
 
 /* ================= Friends ================= */
-$('btn-add-friend').addEventListener('click', () => {
+function sendFriendRequestFromInput(username, statusEl) {
+  if (!username) return;
+  socket.emit('friend-request', { username }, (res) => {
+    if (res.error) {
+      if (statusEl) { statusEl.textContent = res.error; statusEl.className = 'friends-add-status err'; }
+      else toast(res.error);
+      return;
+    }
+    if (res.accepted && res.friend) {
+      const idx = friends.findIndex((f) => f.id === res.friend.id);
+      if (idx >= 0) friends[idx] = res.friend; else friends.push(res.friend);
+      renderFriends();
+      const msg = `${res.friend.username} arkadaş eklendi`;
+      if (statusEl) { statusEl.textContent = msg; statusEl.className = 'friends-add-status ok'; }
+      else toast(msg);
+      return;
+    }
+    const msg = 'Arkadaşlık isteği gönderildi';
+    if (statusEl) { statusEl.textContent = msg; statusEl.className = 'friends-add-status ok'; }
+    else toast(msg);
+    // outgoing list socket üzerinden friend-requests ile güncellenir
+  });
+}
+
+function openAddFriendModal() {
   showModal('Arkadaş Ekle', `<input class="modal-input" id="friend-input" placeholder="Kullanıcı adı" />`, [
     { label: 'İptal', onClick: closeModal },
-    { label: 'Ekle', className: 'btn-primary', onClick: () => {
+    { label: 'İstek Gönder', className: 'btn-primary', onClick: () => {
       const username = $('friend-input').value.trim();
       if (!username) return;
-      socket.emit('add-friend', { username }, (res) => {
-        if (res.error) { toast(res.error); return; }
-        const idx = friends.findIndex((f) => f.id === res.friend.id);
-        if (idx >= 0) friends[idx] = res.friend; else friends.push(res.friend);
-        renderFriends();
-        closeModal();
-        toast(`${res.friend.username} eklendi`);
-      });
+      sendFriendRequestFromInput(username);
+      closeModal();
     }},
   ]);
   $('friend-input').focus();
+}
+
+$('btn-add-friend')?.addEventListener('click', openAddFriendModal);
+$('btn-friends-nav')?.addEventListener('click', () => openFriendsView(friendsTab === 'add' ? 'online' : friendsTab));
+document.querySelector('.friends-tabs')?.addEventListener('click', (e) => {
+  const tab = e.target.closest('[data-friends-tab]');
+  if (!tab) return;
+  setFriendsTab(tab.dataset.friendsTab);
+});
+$('friends-search')?.addEventListener('input', () => renderFriendsMain());
+$('friends-add-form')?.addEventListener('submit', (e) => {
+  e.preventDefault();
+  sendFriendRequestFromInput($('friends-add-input').value.trim(), $('friends-add-status'));
+  $('friends-add-input').value = '';
 });
 
 /* ================= Auth ================= */
@@ -1001,9 +1190,10 @@ function connectSocket(token) {
     if (err.message === 'unauthorized') { deleteCookie('muck_token'); showAuth(); }
   });
 
-  socket.on('init', ({ user, friends: fr, servers: srv }) => {
+  socket.on('init', ({ user, friends: fr, friendRequests: frReq, servers: srv }) => {
     currentUser = user;
-    friends = fr;
+    friends = fr || [];
+    friendRequests = frReq || { incoming: [], outgoing: [] };
     servers = srv;
     $('user-name').textContent = user.username;
     $('user-avatar').textContent = initials(user.username);
@@ -1012,6 +1202,7 @@ function connectSocket(token) {
     $('settings-username').textContent = user.username;
     renderRail();
     renderFriends();
+    updateFriendsBadge();
     showApp();
     applyRoute();
   });
@@ -1024,6 +1215,16 @@ function connectSocket(token) {
     // Aktif üye paneli veya DM profili çevrimiçi durumunu yansıtsın.
     if (activeServer) renderMembers();
     if (activeView === 'dm' && activeDmFriendId === f.id) renderProfile();
+  });
+
+  socket.on('friend-requests', (payload) => {
+    friendRequests = payload || { incoming: [], outgoing: [] };
+    updateFriendsBadge();
+    renderFriends();
+  });
+
+  socket.on('friend-request-received', ({ user }) => {
+    toast(`${user?.username || 'Birisi'} sana arkadaşlık isteği gönderdi`);
   });
 
   socket.on('message', ({ channelId, message }) => {
@@ -1147,6 +1348,9 @@ document.addEventListener('touchend', (e) => {
     else if (!rightOpen) openRightDrawer();
   }
 }, { passive: true });
+
+/* Sağ tık menüsü (ileride özel menüler için kapalı) */
+document.addEventListener('contextmenu', (e) => e.preventDefault());
 
 /* ================= PWA ================= */
 if ('serviceWorker' in navigator) {

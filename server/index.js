@@ -191,18 +191,106 @@ io.on('connection', (socket) => {
   socket.emit('init', {
     user: { id: userId, username: socket.data.username },
     friends: friendsSnapshot(userId),
+    friendRequests: store.getFriendRequests(userId),
     servers: store.getUserServers(userId),
   });
   if (wasOffline) notifyFriendsOfChange(userId);
 
   // ---- Friends ----
-  socket.on('add-friend', ({ username }, cb) => {
-    const result = store.addFriend(userId, username);
+  function emitFriendRequestsTo(uid) {
+    const payload = store.getFriendRequests(uid);
+    const sockets = onlineUsers.get(uid);
+    if (sockets) for (const sid of sockets) io.to(sid).emit('friend-requests', payload);
+  }
+
+  socket.on('friend-request', ({ username }, cb) => {
+    const result = store.sendFriendRequest(userId, username);
+    if (result.error) return cb?.({ error: result.error });
+
+    // Otomatik kabul (ters istek vardı)
+    if (result.friend) {
+      const friend = result.friend;
+      cb?.({
+        accepted: true,
+        friend: { id: friend.id, username: friend.username, online: isOnline(friend.id) },
+      });
+      notifyFriendsOfChange(userId);
+      notifyFriendsOfChange(friend.id);
+      emitFriendRequestsTo(userId);
+      emitFriendRequestsTo(friend.id);
+      return;
+    }
+
+    cb?.({
+      request: {
+        id: result.request.id,
+        user: result.to,
+        createdAt: result.request.createdAt,
+      },
+    });
+    emitFriendRequestsTo(userId);
+    emitFriendRequestsTo(result.to.id);
+    // Hedefe bildirim
+    const tsockets = onlineUsers.get(result.to.id);
+    if (tsockets) {
+      for (const sid of tsockets) {
+        io.to(sid).emit('friend-request-received', {
+          id: result.request.id,
+          user: result.from,
+          createdAt: result.request.createdAt,
+        });
+      }
+    }
+  });
+
+  socket.on('friend-accept', ({ requestId }, cb) => {
+    const result = store.acceptFriendRequest(userId, requestId);
     if (result.error) return cb?.({ error: result.error });
     const friend = result.friend;
     cb?.({ friend: { id: friend.id, username: friend.username, online: isOnline(friend.id) } });
     notifyFriendsOfChange(userId);
     notifyFriendsOfChange(friend.id);
+    emitFriendRequestsTo(userId);
+    emitFriendRequestsTo(friend.id);
+  });
+
+  socket.on('friend-decline', ({ requestId }, cb) => {
+    const result = store.declineFriendRequest(userId, requestId);
+    if (result.error) return cb?.({ error: result.error });
+    cb?.({ success: true });
+    emitFriendRequestsTo(userId);
+    if (result.request) {
+      const otherId = result.request.fromId === userId ? result.request.toId : result.request.fromId;
+      emitFriendRequestsTo(otherId);
+    }
+  });
+
+  // Eski istemci uyumu → friend-request
+  socket.on('add-friend', ({ username }, cb) => {
+    const result = store.sendFriendRequest(userId, username);
+    if (result.error) return cb?.({ error: result.error });
+    if (result.friend) {
+      const friend = result.friend;
+      cb?.({ friend: { id: friend.id, username: friend.username, online: isOnline(friend.id) } });
+      notifyFriendsOfChange(userId);
+      notifyFriendsOfChange(friend.id);
+      emitFriendRequestsTo(userId);
+      emitFriendRequestsTo(friend.id);
+      return;
+    }
+    cb?.({ pending: true, message: 'Arkadaşlık isteği gönderildi.' });
+    emitFriendRequestsTo(userId);
+    emitFriendRequestsTo(result.to.id);
+    const tsockets = onlineUsers.get(result.to.id);
+    if (tsockets) {
+      for (const sid of tsockets) {
+        io.to(sid).emit('friend-request-received', {
+          id: result.request.id,
+          user: result.from,
+          createdAt: result.request.createdAt,
+        });
+      }
+    }
   });
 
   socket.on('remove-friend', ({ friendId }, cb) => {
