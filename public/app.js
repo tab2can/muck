@@ -26,6 +26,8 @@ let dmPins = [];
 let dmProfileOpen = true;
 let dmPanelMode = null; // null | search | pins
 let dmCallActive = false;
+let dmCallRinging = false; // giden arama (karşı taraf bekleniyor)
+let dmIncoming = null; // { channelId, fromId, fromUsername }
 let dmReply = null;
 let dmFeatures = null;
 let voiceManager = null;
@@ -1412,14 +1414,15 @@ function buildVoiceTiles(state) {
 
 let lastSpeakingFlags = {};
 function applySpeakingUi(flags) {
-  const grid = $('voice-grid');
-  if (!grid) return;
-  for (const tile of grid.querySelectorAll('.voice-tile')) {
-    if (tile.classList.contains('voice-tile--screen')) {
-      tile.classList.remove('speaking');
-      continue;
+  const grids = [$('voice-grid'), $('dm-voice-grid')].filter(Boolean);
+  for (const grid of grids) {
+    for (const tile of grid.querySelectorAll('.voice-tile')) {
+      if (tile.classList.contains('voice-tile--screen')) {
+        tile.classList.remove('speaking');
+        continue;
+      }
+      tile.classList.toggle('speaking', !!flags[tile.dataset.key]);
     }
-    tile.classList.toggle('speaking', !!flags[tile.dataset.key]);
   }
 }
 
@@ -1490,6 +1493,16 @@ function toggleMaximize(key) {
 let lastVoiceState = null;
 let voiceResizeBound = false;
 let pendingVoiceRender = false;
+
+function voiceUiActive() {
+  return activeView === 'voice' || dmCallActive;
+}
+
+function getActiveVoiceGrid() {
+  if (dmCallActive) return $('dm-voice-grid');
+  return $('voice-grid');
+}
+
 function renderVoiceGrid(state) {
   lastVoiceState = state;
   if (!voiceResizeBound) {
@@ -1498,11 +1511,11 @@ function renderVoiceGrid(state) {
     window.addEventListener('resize', () => {
       if (document.fullscreenElement) return; // tam ekranda yeniden çizme
       clearTimeout(rt);
-      rt = setTimeout(() => { if (lastVoiceState && activeView === 'voice') renderVoiceGrid(lastVoiceState); }, 120);
+      rt = setTimeout(() => { if (lastVoiceState && voiceUiActive()) renderVoiceGrid(lastVoiceState); }, 120);
     });
     // Tam ekrandan çıkınca (gerekiyorsa) ızgarayı tazele.
     document.addEventListener('fullscreenchange', () => {
-      if (!document.fullscreenElement && pendingVoiceRender && lastVoiceState && activeView === 'voice') {
+      if (!document.fullscreenElement && pendingVoiceRender && lastVoiceState && voiceUiActive()) {
         pendingVoiceRender = false;
         renderVoiceGrid(lastVoiceState);
       }
@@ -1510,7 +1523,8 @@ function renderVoiceGrid(state) {
   }
   // Tam ekran açıkken DOM'u yeniden kurma (video kaldırılırsa tam ekran kapanır).
   if (document.fullscreenElement) { pendingVoiceRender = true; return; }
-  const grid = $('voice-grid');
+  const grid = getActiveVoiceGrid();
+  if (!grid) return;
   grid.innerHTML = '';
   const tiles = buildVoiceTiles(state);
 
@@ -1534,8 +1548,8 @@ function renderVoiceGrid(state) {
   // Kutu boyutunu, hem genişliğe hem yüksekliğe sığacak şekilde sınırla.
   const gap = 0.6 * 16; // rem -> px
   const pad = 0.8 * 16 * 2;
-  const availW = grid.clientWidth - pad;
-  const availH = grid.clientHeight - pad;
+  const availW = Math.max(120, grid.clientWidth - pad);
+  const availH = Math.max(100, grid.clientHeight - pad);
   const rows = Math.ceil(n / cols);
   const wByCols = (availW - gap * (cols - 1)) / cols;
   const hByRows = (availH - gap * (rows - 1)) / rows;
@@ -1608,7 +1622,9 @@ function leaveVoiceChannel() {
 function joinVoiceChannel(channelId, name, push = true) {
   if (voiceManager) voiceManager.leave();
   dmCallActive = false;
+  dmCallRinging = false;
   dmFeatures?.showCallStage?.(false);
+  hideIncomingDmCall();
   activeChannelId = null;
   activeDmFriendId = null;
   activeDmChannelId = null;
@@ -1659,7 +1675,10 @@ $('vc-deafen').addEventListener('click', () => {
 });
 $('vc-cam').addEventListener('click', () => voiceManager?.toggleCamera());
 $('vc-screen').addEventListener('click', () => voiceManager?.toggleScreen());
-$('vc-leave').addEventListener('click', () => leaveVoiceChannel());
+$('vc-leave').addEventListener('click', () => {
+  if (dmCallActive || dmCallRinging) endDmCall();
+  else leaveVoiceChannel();
+});
 $('user-panel-info').addEventListener('click', openSettings);
 
 /* ================= Server modals ================= */
@@ -2537,11 +2556,45 @@ function connectSocket(token) {
 
   socket.on('dm-call-update', ({ channelId, participants }) => {
     if (channelId !== activeDmChannelId) return;
-    if (participants?.length && !dmCallActive && activeView === 'dm') {
-      // Karşı taraf arıyor — otomatik UI gösterme, sadece toast
-      toast('DM araması var — Arama Başlat ile katıl');
+    if (dmCallActive) {
+      voiceManager?.onPresence?.(participants || []);
+      const others = (participants || []).filter((p) => p.userId !== currentUser?.id);
+      if (dmCallRinging && others.length) {
+        dmCallRinging = false;
+        dmFeatures?.setCallRinging?.(false, 'Arama sürüyor');
+      }
     }
-    if (dmCallActive) voiceManager?.onPresence?.(participants || []);
+  });
+
+  socket.on('dm-call-incoming', ({ channelId, fromId, fromUsername, ringMs }) => {
+    if (!channelId || fromId === currentUser?.id) return;
+    if (dmCallActive || dmCallRinging) return;
+    showIncomingDmCall({ channelId, fromId, fromUsername, ringMs });
+  });
+
+  socket.on('dm-call-ring-ended', ({ channelId, reason }) => {
+    if (dmIncoming?.channelId === channelId) hideIncomingDmCall();
+    if (channelId !== activeDmChannelId && !(dmCallActive || dmCallRinging)) return;
+    if (reason === 'timeout' || reason === 'reject' || reason === 'cancel' || reason === 'ended') {
+      if (dmCallRinging || dmCallActive) {
+        const msg = reason === 'timeout' ? 'Arama yanıtlanmadı'
+          : reason === 'reject' ? 'Arama reddedildi'
+          : reason === 'ended' ? 'Arama sona erdi'
+          : 'Arama iptal edildi';
+        cleanupDmCallUi();
+        toast(msg);
+      }
+    } else if (reason === 'accepted') {
+      dmCallRinging = false;
+      dmFeatures?.setCallRinging?.(false, 'Arama sürüyor');
+      if ($('voice-conn-title')) $('voice-conn-title').textContent = 'Ses Bağlantısı Kuruldu';
+    }
+  });
+
+  socket.on('dm-call-alone-timeout', ({ channelId }) => {
+    if (channelId && channelId !== activeDmChannelId && !dmCallActive) return;
+    cleanupDmCallUi();
+    toast('2 dakika yalnız kaldığın için aramadan ayrıldın');
   });
 
   socket.on('server-updated', ({ server }) => {
@@ -2661,64 +2714,176 @@ document.addEventListener('contextmenu', (e) => {
 });
 
 /* ================= DM call + toolbar ================= */
+function dmCallPeerName() {
+  return activeGroupTitle || friends.find((f) => f.id === activeDmFriendId)?.username || 'DM';
+}
+
+function syncDmCallControls() {
+  if (!voiceManager) return;
+  $('dm-call-mic')?.classList.toggle('off', voiceManager.isMuted());
+  $('dm-call-deafen')?.classList.toggle('off', voiceManager.isDeafened());
+  $('dm-call-cam')?.classList.toggle('off', !voiceManager.isCameraOn());
+  $('dm-call-cam')?.classList.toggle('on', voiceManager.isCameraOn());
+  $('dm-call-screen')?.classList.toggle('on', voiceManager.isScreenOn());
+  $('vc-mic')?.classList.toggle('off', voiceManager.isMuted());
+  $('vc-deafen')?.classList.toggle('off', voiceManager.isDeafened());
+  $('vc-cam')?.classList.toggle('on', voiceManager.isCameraOn());
+  $('vc-screen')?.classList.toggle('on', voiceManager.isScreenOn());
+}
+
 async function ensureVoiceManagerForDm() {
   if (voiceManager) return voiceManager;
   voiceManager = createVoiceManager({
     socket,
     username: currentUser?.username,
-    onUpdate: () => {
-      $('dm-call-mic')?.classList.toggle('off', voiceManager.isMuted());
-      $('dm-call-cam')?.classList.toggle('off', !voiceManager.isCameraOn());
-      $('dm-call-screen')?.classList.toggle('on', voiceManager.isScreenOn());
+    onUpdate: (state) => {
+      if (dmCallActive) renderVoiceGrid(state);
+      syncDmCallControls();
     },
-    onSpeaking: () => {},
+    onSpeaking: (flags) => {
+      lastSpeakingFlags = flags || {};
+      applySpeakingUi(lastSpeakingFlags);
+    },
   });
   return voiceManager;
 }
 
-async function startDmCall() {
-  if (!activeDmChannelId) { toast('Önce bir DM aç.'); return; }
-  if (dmCallActive) return;
-  // Önceki oturumdan kalan kamerayı kapat
-  if (voiceManager?.isCameraOn?.()) {
-    try { await voiceManager.toggleCamera(); } catch {}
+function cleanupDmCallUi() {
+  const hadManager = !!voiceManager && (dmCallActive || dmCallRinging);
+  dmCallActive = false;
+  dmCallRinging = false;
+  maximizedTile = null;
+  lastVoiceState = null;
+  lastSpeakingFlags = {};
+  const grid = $('dm-voice-grid');
+  if (grid) grid.innerHTML = '';
+  dmFeatures?.showCallStage?.(false);
+  dmFeatures?.setCallRinging?.(false);
+  hideVoiceFooter();
+  hideIncomingDmCall();
+  if (hadManager) {
+    voiceManager?.leave();
+    voiceManager = null;
+  }
+}
+
+function showIncomingDmCall({ channelId, fromId, fromUsername, ringMs }) {
+  dmIncoming = { channelId, fromId, fromUsername };
+  const overlay = $('dm-incoming-overlay');
+  if (!overlay) return;
+  $('dm-incoming-name').textContent = fromUsername || 'Birisi';
+  $('dm-incoming-avatar').textContent = initials(fromUsername || '?');
+  $('dm-incoming-sub').textContent = 'Gelen arama · 20 sn';
+  overlay.classList.remove('hidden');
+  clearTimeout(showIncomingDmCall._t);
+  showIncomingDmCall._t = setTimeout(() => {
+    if (dmIncoming?.channelId === channelId) hideIncomingDmCall();
+  }, Math.min(ringMs || 20000, 21000));
+}
+
+function hideIncomingDmCall() {
+  clearTimeout(showIncomingDmCall._t);
+  dmIncoming = null;
+  $('dm-incoming-overlay')?.classList.add('hidden');
+}
+
+async function enterDmCallMedia({ ringing = false } = {}) {
+  if (!activeDmChannelId) return;
+  if (voiceManager && !dmCallActive && !dmCallRinging) {
+    voiceManager.leave();
+    voiceManager = null;
   }
   await ensureVoiceManagerForDm();
-  socket.emit('join-dm-call', { channelId: activeDmChannelId }, async (res) => {
-    if (res?.error) { toast(res.error); return; }
-    try {
-      await voiceManager.join(activeDmChannelId, res.participants || []);
-      // Katılırken kamera kapalı kalsın
-      if (voiceManager.isCameraOn()) {
-        try { await voiceManager.toggleCamera(); } catch {}
+  return new Promise((resolve) => {
+    socket.emit('join-dm-call', { channelId: activeDmChannelId }, async (res) => {
+      if (res?.error) {
+        toast(res.error);
+        cleanupDmCallUi();
+        resolve(false);
+        return;
       }
-      dmCallActive = true;
-      const name = activeGroupTitle || friends.find((f) => f.id === activeDmFriendId)?.username || 'DM';
-      dmFeatures?.updateCallStage?.(name);
-      dmFeatures?.showCallStage?.(true);
-      showVoiceFooter(name);
-      $('dm-call-cam')?.classList.add('off');
-    } catch (err) {
-      toast(err?.message || 'Arama başlatılamadı');
+      try {
+        await voiceManager.join(activeDmChannelId, res.participants || []);
+        if (voiceManager.isCameraOn()) {
+          try { await voiceManager.toggleCamera(); } catch {}
+        }
+        dmCallActive = true;
+        dmCallRinging = !!ringing;
+        const name = dmCallPeerName();
+        dmFeatures?.updateCallStage?.(name);
+        dmFeatures?.showCallStage?.(true);
+        dmFeatures?.setCallRinging?.(!!ringing, ringing ? 'Aranıyor…' : 'Arama sürüyor');
+        showVoiceFooter(name);
+        $('voice-conn-title').textContent = ringing ? 'Aranıyor…' : 'Ses Bağlantısı Kuruldu';
+        syncDmCallControls();
+        $('dm-call-cam')?.classList.add('off');
+        resolve(true);
+      } catch (err) {
+        toast(err?.message || 'Arama başlatılamadı');
+        cleanupDmCallUi();
+        resolve(false);
+      }
+    });
+  });
+}
+
+async function startDmCall() {
+  if (!activeDmChannelId) { toast('Önce bir DM aç.'); return; }
+  if (dmCallActive || dmCallRinging) return;
+  if (dmIncoming?.channelId === activeDmChannelId) {
+    await acceptIncomingDmCall();
+    return;
+  }
+
+  socket.emit('dm-call-ring', { channelId: activeDmChannelId }, async (res) => {
+    if (res?.error) { toast(res.error); return; }
+    if (res.joinDirect) {
+      await enterDmCallMedia({ ringing: false });
+      return;
     }
+    await enterDmCallMedia({ ringing: true });
   });
 }
 
 function endDmCall() {
-  if (!dmCallActive && !voiceManager) {
+  const channelId = activeDmChannelId;
+  if (dmCallRinging && channelId) {
+    socket.emit('dm-call-cancel', { channelId });
+  }
+  if (!dmCallActive && !dmCallRinging && !voiceManager) {
     dmFeatures?.showCallStage?.(false);
+    hideIncomingDmCall();
     return;
   }
-  voiceManager?.leave();
-  voiceManager = null;
-  dmCallActive = false;
-  dmFeatures?.showCallStage?.(false);
-  hideVoiceFooter();
+  cleanupDmCallUi();
+}
+
+async function acceptIncomingDmCall() {
+  const incoming = dmIncoming;
+  if (!incoming?.channelId) return;
+  hideIncomingDmCall();
+  const channelId = incoming.channelId;
+  if (activeDmChannelId !== channelId) {
+    activeDmChannelId = channelId;
+    openDMByChannel(channelId, true);
+    await new Promise((r) => setTimeout(r, 120));
+  }
+  await enterDmCallMedia({ ringing: false });
+}
+
+function rejectIncomingDmCall() {
+  const channelId = dmIncoming?.channelId;
+  hideIncomingDmCall();
+  if (channelId) socket.emit('dm-call-reject', { channelId });
 }
 
 function toggleDmMic() { voiceManager?.toggleMic(); }
+function toggleDmDeafen() { voiceManager?.toggleDeafen(); }
 function toggleDmCam() { voiceManager?.toggleCamera(); }
 function toggleDmScreen() { voiceManager?.toggleScreen(); }
+
+$('dm-incoming-accept')?.addEventListener('click', () => acceptIncomingDmCall());
+$('dm-incoming-reject')?.addEventListener('click', () => rejectIncomingDmCall());
 
 dmFeatures = initDmFeatures({
   $, toast, escapeHtml, initials, formatTime, userChipHtml,
@@ -2738,6 +2903,7 @@ dmFeatures = initDmFeatures({
   startDmCall,
   endDmCall,
   toggleDmMic,
+  toggleDmDeafen,
   toggleDmCam,
   toggleDmScreen,
   updatePanel,

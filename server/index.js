@@ -119,6 +119,65 @@ app.get(/^(?!\/api\/|\/socket\.io\/).*/, (req, res, next) => {
 const onlineUsers = new Map();
 // channelId -> Map<socketId, { userId, username, muted, camera, screen }>
 const voiceParticipants = new Map();
+// DM arama zili: channelId -> { fromId, fromUsername, timer }
+const dmCallRings = new Map();
+// DM yalnız kalma: channelId -> timeout
+const dmAloneTimers = new Map();
+const DM_RING_MS = 20_000;
+const DM_ALONE_MS = 2 * 60_000;
+
+function clearDmRing(channelId, reason = 'cancel') {
+  const ring = dmCallRings.get(channelId);
+  if (!ring) return null;
+  clearTimeout(ring.timer);
+  dmCallRings.delete(channelId);
+  const channel = store.getDMChannelById(channelId);
+  if (channel) {
+    emitToChannelUsers(channel, 'dm-call-ring-ended', {
+      channelId,
+      reason,
+      fromId: ring.fromId,
+      fromUsername: ring.fromUsername,
+    });
+  }
+  return ring;
+}
+
+function refreshDmAloneTimer(channelId) {
+  const prev = dmAloneTimers.get(channelId);
+  if (prev) {
+    clearTimeout(prev);
+    dmAloneTimers.delete(channelId);
+  }
+  const channel = store.getDMChannelById(channelId);
+  if (!channel) return;
+  const map = voiceParticipants.get(channelId);
+  if (!map || map.size !== 1) return;
+  const [sid] = map.keys();
+  const sock = io.sockets.sockets.get(sid);
+  if (!sock?.data?.dmCall) return;
+
+  dmAloneTimers.set(channelId, setTimeout(() => {
+    dmAloneTimers.delete(channelId);
+    const still = voiceParticipants.get(channelId);
+    if (!still || still.size !== 1) return;
+    for (const [aloneSid] of still) {
+      const s = io.sockets.sockets.get(aloneSid);
+      if (!s?.data?.dmCall) continue;
+      s.emit('dm-call-alone-timeout', { channelId });
+      leaveVoice(s);
+    }
+  }, DM_ALONE_MS));
+}
+
+function kickDmCallParticipants(channelId) {
+  const map = voiceParticipants.get(channelId);
+  if (!map) return;
+  for (const sid of [...map.keys()]) {
+    const s = io.sockets.sockets.get(sid);
+    if (s?.data?.dmCall) leaveVoice(s);
+  }
+}
 
 function isOnline(userId) { return onlineUsers.has(userId); }
 
@@ -279,6 +338,9 @@ function leaveVoice(socket) {
         fromId: uid,
       });
     }
+    const remaining = voiceParticipants.get(channelId);
+    if (!remaining || remaining.size === 0) clearDmRing(channelId, 'ended');
+    refreshDmAloneTimer(channelId);
   } else {
     broadcastVoicePresence(channelId);
     notifyFriendsVoiceOfUser(uid);
@@ -821,11 +883,83 @@ io.on('connection', (socket) => {
     }
   });
 
-  // ---- DM araması (aynı mesh, kanal = dmChannelId) ----
+  // ---- DM araması (zil + mesh, kanal = dmChannelId) ----
+  socket.on('dm-call-ring', ({ channelId }, cb) => {
+    const channel = store.getDMChannelById(channelId);
+    if (!channel || !channel.users.includes(userId)) return cb?.({ error: 'DM bulunamadı.' });
+
+    const existing = getVoiceList(channelId).filter((p) => p.userId !== userId);
+    if (existing.length > 0) {
+      return cb?.({ ok: true, joinDirect: true });
+    }
+
+    const prev = dmCallRings.get(channelId);
+    if (prev && prev.fromId !== userId) {
+      return cb?.({ error: 'Bu sohbette zaten bir arama var.' });
+    }
+    if (prev && prev.fromId === userId) {
+      return cb?.({ ok: true, ringing: true });
+    }
+
+    const timer = setTimeout(() => {
+      clearDmRing(channelId, 'timeout');
+      kickDmCallParticipants(channelId);
+    }, DM_RING_MS);
+
+    dmCallRings.set(channelId, {
+      fromId: userId,
+      fromUsername: socket.data.username,
+      timer,
+    });
+
+    emitToChannelUsers(channel, 'dm-call-incoming', {
+      channelId,
+      fromId: userId,
+      fromUsername: socket.data.username,
+      ringMs: DM_RING_MS,
+    }, userId);
+
+    cb?.({ ok: true, ringing: true, ringMs: DM_RING_MS });
+  });
+
+  socket.on('dm-call-cancel', ({ channelId }, cb) => {
+    const channel = store.getDMChannelById(channelId);
+    if (!channel || !channel.users.includes(userId)) return cb?.({ error: 'DM bulunamadı.' });
+    const ring = dmCallRings.get(channelId);
+    if (ring && ring.fromId !== userId) return cb?.({ error: 'Bu aramayı iptal edemezsiniz.' });
+    clearDmRing(channelId, 'cancel');
+    if (socket.data.voiceChannelId === channelId && socket.data.dmCall) leaveVoice(socket);
+    cb?.({ ok: true });
+  });
+
+  socket.on('dm-call-reject', ({ channelId }, cb) => {
+    const channel = store.getDMChannelById(channelId);
+    if (!channel || !channel.users.includes(userId)) return cb?.({ error: 'DM bulunamadı.' });
+    const ring = dmCallRings.get(channelId);
+    if (!ring) return cb?.({ ok: true });
+    clearDmRing(channelId, 'reject');
+    kickDmCallParticipants(channelId);
+    cb?.({ ok: true });
+  });
+
   socket.on('join-dm-call', ({ channelId }, cb) => {
     const channel = store.getDMChannelById(channelId);
     if (!channel || !channel.users.includes(userId)) return cb?.({ error: 'DM bulunamadı.' });
     if (socket.data.voiceChannelId && socket.data.voiceChannelId !== channelId) leaveVoice(socket);
+
+    const ring = dmCallRings.get(channelId);
+    if (ring && ring.fromId !== userId) {
+      // Karşı taraf kabul etti — zili kapat
+      clearTimeout(ring.timer);
+      dmCallRings.delete(channelId);
+      emitToChannelUsers(channel, 'dm-call-ring-ended', {
+        channelId,
+        reason: 'accepted',
+        fromId: ring.fromId,
+        fromUsername: ring.fromUsername,
+        accepterId: userId,
+      });
+    }
 
     if (!voiceParticipants.has(channelId)) voiceParticipants.set(channelId, new Map());
     const map = voiceParticipants.get(channelId);
@@ -857,6 +991,7 @@ io.on('connection', (socket) => {
       fromId: userId,
       username: socket.data.username,
     }, null);
+    refreshDmAloneTimer(channelId);
   });
 
   // ---- Voice channels (mesh signaling) ----

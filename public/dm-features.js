@@ -7,7 +7,7 @@ export function initDmFeatures(api) {
   const {
     $, toast, escapeHtml, initials, formatTime, userChipHtml,
     getSocket, getState, setState, openGroupChannel,
-    startDmCall, endDmCall, toggleDmMic, toggleDmCam, toggleDmScreen,
+    startDmCall, endDmCall, toggleDmMic, toggleDmDeafen, toggleDmCam, toggleDmScreen,
     updatePanel, markReply,
   } = api;
 
@@ -434,11 +434,31 @@ export function initDmFeatures(api) {
   /* ---- Call UI ---- */
   function showCallStage(visible) {
     $('dm-call-stage')?.classList.toggle('hidden', !visible);
+    if (!visible) {
+      $('dm-call-stage')?.classList.remove('ringing');
+      $('dm-call-banner')?.classList.add('hidden');
+    }
   }
 
   function updateCallStage(name) {
-    $('dm-call-name').textContent = name || '—';
-    $('dm-call-avatar').textContent = initials(name);
+    const n = name || '—';
+    if ($('dm-call-name')) $('dm-call-name').textContent = n;
+    if ($('dm-call-avatar')) $('dm-call-avatar').textContent = initials(n);
+  }
+
+  function setCallRinging(ringing, statusText) {
+    const stage = $('dm-call-stage');
+    const banner = $('dm-call-banner');
+    stage?.classList.toggle('ringing', !!ringing);
+    banner?.classList.toggle('hidden', !ringing && !statusText);
+    if (statusText && $('dm-call-status')) $('dm-call-status').textContent = statusText;
+    if (!ringing && !statusText) banner?.classList.add('hidden');
+    if (!ringing && statusText) {
+      banner?.classList.remove('hidden');
+      // Kısa süre durum göster, sonra banner'ı gizle
+      clearTimeout(setCallRinging._t);
+      setCallRinging._t = setTimeout(() => banner?.classList.add('hidden'), 1800);
+    }
   }
 
   /* ---- Wire DOM ---- */
@@ -473,6 +493,7 @@ export function initDmFeatures(api) {
   $('dm-btn-call')?.addEventListener('click', () => startDmCall?.());
   $('dm-call-end')?.addEventListener('click', () => endDmCall?.());
   $('dm-call-mic')?.addEventListener('click', () => toggleDmMic?.());
+  $('dm-call-deafen')?.addEventListener('click', () => toggleDmDeafen?.());
   $('dm-call-cam')?.addEventListener('click', () => toggleDmCam?.());
   $('dm-call-screen')?.addEventListener('click', () => toggleDmScreen?.());
   $('dm-emoji-btn')?.addEventListener('click', (e) => {
@@ -503,6 +524,7 @@ export function initDmFeatures(api) {
     openMessageMenu,
     showCallStage,
     updateCallStage,
+    setCallRinging,
     closeSearchPanel,
     closePinsPanel,
     renderPins,

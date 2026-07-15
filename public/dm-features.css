@@ -66,23 +66,38 @@
 /* DM call stage */
 .dm-call-stage {
   flex: 0 0 auto;
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: .55rem; padding: 1.5rem 1rem 1.1rem;
+  display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start;
+  gap: .55rem; padding: .75rem .75rem .65rem;
   background: linear-gradient(180deg, var(--surface) 0%, var(--bg) 100%);
   border-bottom: 1px solid var(--border);
-  min-height: 220px;
+  min-height: 0;
+  max-height: min(52vh, 520px);
 }
+.dm-call-stage.ringing { min-height: 200px; }
+.dm-call-banner {
+  display: flex; align-items: center; gap: .75rem;
+  padding: .35rem .25rem 0;
+}
+.dm-call-banner.hidden { display: none; }
 .dm-call-avatar {
-  width: 96px; height: 96px; border-radius: 50%;
-  background: var(--accent); color: #fff;
-  display: grid; place-items: center; font-size: 2rem; font-weight: 800;
+  width: 52px; height: 52px; border-radius: 50%;
+  background: var(--accent); color: #fff; flex-shrink: 0;
+  display: grid; place-items: center; font-size: 1.15rem; font-weight: 800;
 }
-.dm-call-name { font-weight: 800; font-size: 1.15rem; }
+.dm-call-banner-text { min-width: 0; }
+.dm-call-name { font-weight: 800; font-size: 1rem; }
 .dm-call-status { color: var(--muted); font-size: .85rem; }
+.dm-voice-grid {
+  flex: 1 1 auto;
+  min-height: 160px;
+  max-height: min(42vh, 420px);
+  padding: .35rem .15rem;
+}
 .dm-call-controls {
-  display: flex; align-items: center; gap: .5rem;
-  margin-top: .55rem; padding: .55rem .7rem;
+  display: flex; align-items: center; justify-content: center; gap: .5rem;
+  margin-top: .15rem; padding: .45rem .7rem;
   background: var(--surface-3); border: 1px solid var(--border); border-radius: 999px;
+  align-self: center;
 }
 .dm-call-ctrl {
   width: 42px; height: 42px; border: none; border-radius: 50%;
@@ -91,8 +106,47 @@
 }
 .dm-call-ctrl:hover { background: var(--surface); }
 .dm-call-ctrl.off { color: var(--danger); }
+.dm-call-ctrl.on { color: var(--accent); }
 .dm-call-ctrl--end { background: var(--danger); color: #fff; }
 .dm-call-ctrl--end:hover { filter: 1.05; }
+
+/* Gelen arama overlay */
+.dm-incoming-overlay {
+  position: fixed; z-index: 80; left: 0; right: 0; bottom: 1.25rem;
+  display: flex; justify-content: center; pointer-events: none;
+  padding: 0 1rem;
+}
+.dm-incoming-overlay.hidden { display: none; }
+.dm-incoming-card {
+  pointer-events: auto;
+  display: flex; align-items: center; gap: .85rem;
+  width: min(420px, 100%);
+  padding: .85rem 1rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 12px 40px rgba(0,0,0,.35);
+  animation: dm-incoming-pulse 1.6s ease-in-out infinite;
+}
+@keyframes dm-incoming-pulse {
+  0%, 100% { box-shadow: 0 12px 40px rgba(0,0,0,.35); }
+  50% { box-shadow: 0 12px 40px rgba(0,0,0,.35), 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent); }
+}
+.dm-incoming-avatar {
+  width: 48px; height: 48px; border-radius: 50%;
+  background: var(--accent); color: #fff;
+  display: grid; place-items: center; font-weight: 800; flex-shrink: 0;
+}
+.dm-incoming-meta { flex: 1; min-width: 0; }
+.dm-incoming-name { font-weight: 800; }
+.dm-incoming-sub { color: var(--muted); font-size: .82rem; }
+.dm-incoming-actions { display: flex; gap: .4rem; flex-shrink: 0; }
+.dm-incoming-btn {
+  border: none; border-radius: 8px; padding: .45rem .7rem;
+  font-weight: 700; cursor: pointer; font-size: .82rem;
+}
+.dm-incoming-btn--accept { background: #23a559; color: #fff; }
+.dm-incoming-btn--reject { background: var(--danger); color: #fff; }
 
 /* Group DM modal */
 .group-dm-modal { width: min(440px, 94vw); max-height: min(80vh, 640px); display: flex; flex-direction: column; }

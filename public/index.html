@@ -245,12 +245,20 @@
           <!-- DM sohbet -->
           <div id="view-dm" class="main-view hidden">
             <div id="dm-call-stage" class="dm-call-stage hidden">
-              <div class="dm-call-avatar" id="dm-call-avatar">?</div>
-              <div class="dm-call-name" id="dm-call-name">—</div>
-              <div class="dm-call-status" id="dm-call-status">Arama sürüyor</div>
+              <div id="dm-call-banner" class="dm-call-banner hidden">
+                <div class="dm-call-avatar" id="dm-call-avatar">?</div>
+                <div class="dm-call-banner-text">
+                  <div class="dm-call-name" id="dm-call-name">—</div>
+                  <div class="dm-call-status" id="dm-call-status">Aranıyor…</div>
+                </div>
+              </div>
+              <div class="voice-grid dm-voice-grid" id="dm-voice-grid"></div>
               <div class="dm-call-controls">
                 <button type="button" class="dm-call-ctrl" id="dm-call-mic" title="Mikrofon" aria-label="Mikrofon">
                   <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V21h2v-3.1A7 7 0 0 0 19 11h-2Z"/></svg>
+                </button>
+                <button type="button" class="dm-call-ctrl" id="dm-call-deafen" title="Kulaklık" aria-label="Kulaklık">
+                  <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 3a9 9 0 0 0-9 9v4a3 3 0 0 0 3 3h1v-6H5a7 7 0 0 1 14 0h-2v6h1a3 3 0 0 0 3-3v-4a9 9 0 0 0-9-9Z"/></svg>
                 </button>
                 <button type="button" class="dm-call-ctrl" id="dm-call-cam" title="Kamera" aria-label="Kamera">
                   <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M4 6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h10l4 3V5L14 8H4Z"/></svg>
@@ -422,6 +430,21 @@
   </div>
 
   <div id="toast" class="toast hidden"></div>
+
+  <!-- Gelen DM araması -->
+  <div id="dm-incoming-overlay" class="dm-incoming-overlay hidden" role="dialog" aria-label="Gelen arama">
+    <div class="dm-incoming-card">
+      <div class="dm-incoming-avatar" id="dm-incoming-avatar">?</div>
+      <div class="dm-incoming-meta">
+        <div class="dm-incoming-name" id="dm-incoming-name">—</div>
+        <div class="dm-incoming-sub" id="dm-incoming-sub">Gelen arama</div>
+      </div>
+      <div class="dm-incoming-actions">
+        <button type="button" class="dm-incoming-btn dm-incoming-btn--reject" id="dm-incoming-reject" title="Reddet">Reddet</button>
+        <button type="button" class="dm-incoming-btn dm-incoming-btn--accept" id="dm-incoming-accept" title="Kabul et">Kabul et</button>
+      </div>
+    </div>
+  </div>
 
   <!-- DM sağ tık menüsü -->
   <div id="ctx-menu" class="ctx-menu hidden" role="menu"></div>
