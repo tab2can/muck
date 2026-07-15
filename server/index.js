@@ -601,21 +601,16 @@ io.on('connection', (socket) => {
     emitSocial(userId);
   });
 
-  socket.on('send-dm', ({ friendId, text, channelId }, cb) => {
+  socket.on('send-dm', ({ friendId, text, channelId, replyTo }, cb) => {
     if (!text?.trim()) return cb?.({ error: 'Boş mesaj.' });
 
-    // Grup DM
-    if (channelId) {
-      const channel = store.getDMChannelById(channelId);
-      if (!channel || !channel.users.includes(userId)) return cb?.({ error: 'Kanal bulunamadı.' });
-      const result = store.pushDmChannelMessage(channelId, userId, text);
-      if (result.error) return cb?.({ error: result.error });
+    function broadcastDm(channel, msg) {
       const payload = {
-        channelId,
+        channelId: channel.id,
         type: channel.type,
         fromId: userId,
         username: socket.data.username,
-        message: result.message,
+        message: msg,
       };
       for (const uid of channel.users) {
         if (uid === userId) continue;
@@ -626,12 +621,27 @@ io.on('connection', (socket) => {
             ...payload,
             friendId: channel.type === 'dm' ? userId : null,
             muted: channel.type === 'group'
-              ? store.isGroupMuted(uid, channelId)
+              ? store.isGroupMuted(uid, channel.id)
               : store.isDmMuted(uid, userId),
+            ignored: channel.type === 'dm'
+              ? !!store.getSocial(uid)?.ignored?.includes(userId)
+              : false,
+            blocked: channel.type === 'dm' ? store.isBlockedBy(uid, userId) : false,
           });
         }
         emitSocial(uid);
       }
+    }
+
+    // Grup / kanallı DM
+    if (channelId) {
+      const channel = store.getDMChannelById(channelId);
+      if (!channel || !channel.users.includes(userId)) return cb?.({ error: 'Kanal bulunamadı.' });
+      const result = replyTo
+        ? store.setDmReply(channelId, userId, text, replyTo)
+        : store.pushDmChannelMessage(channelId, userId, text);
+      if (result.error) return cb?.({ error: result.error });
+      broadcastDm(channel, result.message);
       cb?.({ message: result.message, channel: result.channel });
       emitSocial(userId);
       return;
@@ -642,25 +652,13 @@ io.on('connection', (socket) => {
     const bs = store.blockState(userId, friendId);
     if (bs.blockedByMe) return cb?.({ error: 'Engellediğin bir kullanıcıya mesaj gönderemezsin.' });
     if (bs.blockedByThem) return cb?.({ error: 'Bu kullanıcıya mesaj gönderemezsin.' });
-    const result = store.pushDM(userId, friendId, text);
-    if (result.error) return cb?.({ error: result.error });
-    const msg = result.message;
     const channel = store.getOrCreateDMChannel(userId, friendId);
-    const payload = { fromId: userId, username: socket.data.username, message: msg, channelId: channel.id, type: 'dm' };
-    const sockets = onlineUsers.get(friendId);
-    if (sockets) {
-      for (const sid of sockets) {
-        io.to(sid).emit('dm', {
-          friendId: userId,
-          muted: store.isDmMuted(friendId, userId),
-          ignored: !!store.getSocial(friendId)?.ignored?.includes(userId),
-          blocked: store.isBlockedBy(friendId, userId),
-          ...payload,
-        });
-      }
-      emitSocial(friendId);
-    }
-    cb?.({ message: msg });
+    const result = replyTo
+      ? store.setDmReply(channel.id, userId, text, replyTo)
+      : store.pushDM(userId, friendId, text);
+    if (result.error) return cb?.({ error: result.error });
+    broadcastDm(channel, result.message);
+    cb?.({ message: result.message });
     emitSocial(userId);
   });
 
@@ -731,6 +729,27 @@ io.on('connection', (socket) => {
 
   socket.on('get-dm-pins', ({ channelId }, cb) => {
     cb?.(store.getDmPins(userId, channelId));
+  });
+
+  socket.on('react-dm-message', ({ channelId, messageId, emoji }, cb) => {
+    const result = store.reactDmMessage(userId, channelId, messageId, emoji);
+    if (result.error) return cb?.({ error: result.error });
+    cb?.(result);
+    const channel = store.getDMChannelById(channelId);
+    if (channel) {
+      emitToChannelUsers(channel, 'dm-reaction', {
+        channelId,
+        messageId: result.messageId,
+        reactions: result.reactions,
+      });
+    }
+  });
+
+  socket.on('dm-unread', ({ friendId }, cb) => {
+    const result = store.markDmUnread(userId, friendId);
+    if (result.error) return cb?.({ error: result.error });
+    cb?.(result);
+    emitSocial(userId);
   });
 
   socket.on('dm-pin', ({ friendId, pinned }, cb) => {

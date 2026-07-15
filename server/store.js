@@ -668,7 +668,7 @@ export function pushDmChannelMessage(channelId, fromId, text) {
   if (!channel.users.includes(fromId)) return { error: 'Yetkiniz yok.' };
   const key = dmMsgKey(channel);
   if (!data.dms[key]) data.dms[key] = [];
-  const msg = { id: crypto.randomUUID(), fromId, text: text.trim(), ts: Date.now() };
+  const msg = { id: crypto.randomUUID(), fromId, text: text.trim(), ts: Date.now(), reactions: {}, replyTo: null };
   data.dms[key].push(msg);
   if (data.dms[key].length > MAX_MESSAGES) data.dms[key] = data.dms[key].slice(-MAX_MESSAGES);
   channel.lastMessageAt = msg.ts;
@@ -757,6 +757,54 @@ export function getDmPins(userId, channelId) {
   if (!channel || !channel.users.includes(userId)) return { error: 'Kanal bulunamadı.' };
   ensureDmChannelShape(channel);
   return { pins: channel.pins.map(enrichPin) };
+}
+
+export function reactDmMessage(userId, channelId, messageId, emoji) {
+  const channel = getDMChannelById(channelId);
+  if (!channel || !channel.users.includes(userId)) return { error: 'Kanal bulunamadı.' };
+  const em = String(emoji || '').trim().slice(0, 16);
+  if (!em) return { error: 'Emoji gerekli.' };
+  const msgs = data.dms[dmMsgKey(channel)] || [];
+  const msg = msgs.find((m) => m.id === messageId);
+  if (!msg) return { error: 'Mesaj bulunamadı.' };
+  if (!msg.reactions || typeof msg.reactions !== 'object') msg.reactions = {};
+  if (!Array.isArray(msg.reactions[em])) msg.reactions[em] = [];
+  const list = msg.reactions[em];
+  const idx = list.indexOf(userId);
+  if (idx >= 0) list.splice(idx, 1);
+  else list.push(userId);
+  if (list.length === 0) delete msg.reactions[em];
+  save();
+  return { messageId, reactions: msg.reactions, channelId };
+}
+
+export function markDmUnread(userId, friendId) {
+  const user = findById(userId);
+  if (!user) return { error: 'Oturum geçersiz.' };
+  ensureSocial(user).unreadDms[friendId] = true;
+  save();
+  return { social: getSocial(userId) };
+}
+
+export function setDmReply(channelId, fromId, text, replyTo) {
+  const result = pushDmChannelMessage(channelId, fromId, text);
+  if (result.error) return result;
+  if (replyTo && result.message) {
+    const channel = getDMChannelById(channelId);
+    const msgs = data.dms[dmMsgKey(channel)] || [];
+    const msg = msgs.find((m) => m.id === result.message.id);
+    if (msg) {
+      msg.replyTo = {
+        id: replyTo.id,
+        fromId: replyTo.fromId,
+        text: String(replyTo.text || '').slice(0, 200),
+        username: replyTo.username || null,
+      };
+      result.message = msg;
+      save();
+    }
+  }
+  return result;
 }
 
 // ---- DM Channels (URL için kalıcı sayısal id) ----

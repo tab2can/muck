@@ -24,7 +24,9 @@ let activeGroupId = null;
 let activeGroupTitle = '';
 let dmPins = [];
 let dmProfileOpen = true;
+let dmPanelMode = null; // null | search | pins
 let dmCallActive = false;
+let dmReply = null;
 let dmFeatures = null;
 let voiceManager = null;
 let voicePresence = {}; // channelId -> participants
@@ -168,9 +170,13 @@ function updatePanel() {
   const members = $('panel-members');
   const profile = $('panel-profile');
   const active = $('panel-active');
+  const searchPanel = $('panel-dm-search');
+  const pinsPanel = $('panel-dm-pins');
   members?.classList.add('hidden');
   profile?.classList.add('hidden');
   active?.classList.add('hidden');
+  searchPanel?.classList.add('hidden');
+  pinsPanel?.classList.add('hidden');
 
   if (activeView === 'friends') {
     renderActiveNow();
@@ -180,19 +186,25 @@ function updatePanel() {
     renderMembers();
     members?.classList.remove('hidden');
     app.classList.add('with-panel');
-  } else if (activeView === 'dm' && (activeDmFriendId || activeGroupId) && dmProfileOpen) {
-    if (activeGroupId) {
-      renderGroupPanel();
-      members?.classList.remove('hidden');
-      profile?.classList.add('hidden');
+  } else if (activeView === 'dm' && (activeDmFriendId || activeGroupId)) {
+    if (dmPanelMode === 'search') {
+      searchPanel?.classList.remove('hidden');
+      app.classList.add('with-panel');
+    } else if (dmPanelMode === 'pins') {
+      pinsPanel?.classList.remove('hidden');
+      app.classList.add('with-panel');
+    } else if (dmProfileOpen) {
+      if (activeGroupId) {
+        renderGroupPanel();
+        members?.classList.remove('hidden');
+      } else {
+        renderProfile();
+        profile?.classList.remove('hidden');
+      }
+      app.classList.add('with-panel');
     } else {
-      renderProfile();
-      profile?.classList.remove('hidden');
-      members?.classList.add('hidden');
+      app.classList.remove('with-panel');
     }
-    app.classList.add('with-panel');
-  } else if (activeView === 'dm' && !dmProfileOpen) {
-    app.classList.remove('with-panel');
   } else {
     app.classList.remove('with-panel');
   }
@@ -959,16 +971,32 @@ function isAuthorBlocked(authorId) {
   return !!f?.blocked;
 }
 
-function makeMsgEl(author, text, ts, msgId = null) {
+function makeMsgEl(author, text, ts, msgId = null, extra = {}) {
   const div = document.createElement('div');
   div.className = 'msg';
   if (msgId) div.dataset.msgId = msgId;
+  const reply = extra.replyTo;
+  const reactions = extra.reactions || {};
+  let replyHtml = '';
+  if (reply) {
+    replyHtml = `<div class="msg-reply"><span class="msg-reply-author">${escapeHtml(reply.username || '—')}</span> ${escapeHtml(reply.text || '')}</div>`;
+  }
+  const reactionEntries = Object.entries(reactions).filter(([, users]) => users?.length);
+  let reactHtml = '';
+  if (reactionEntries.length) {
+    reactHtml = `<div class="msg-reactions">${reactionEntries.map(([emoji, users]) => {
+      const mine = users.includes(currentUser?.id);
+      return `<button type="button" class="msg-reaction${mine ? ' mine' : ''}" data-emoji="${escapeHtml(emoji)}" data-msg="${escapeHtml(msgId || '')}">${emoji} <span>${users.length}</span></button>`;
+    }).join('')}</div>`;
+  }
   div.innerHTML = `
     <span class="msg-avatar">${escapeHtml(initials(author))}</span>
     <div class="msg-body">
       <span class="msg-author">${escapeHtml(author || '—')}</span>
       <span class="msg-time">${formatTime(ts)}</span>
+      ${replyHtml}
       <div class="msg-text">${escapeHtml(text)}</div>
+      ${reactHtml}
     </div>`;
   if (msgId && activeView === 'dm' && activeDmChannelId) {
     div.dataset.allowMenu = '1';
@@ -976,8 +1004,18 @@ function makeMsgEl(author, text, ts, msgId = null) {
       e.preventDefault();
       e.stopPropagation();
       dmFeatures?.openMessageMenu?.(e.clientX, e.clientY, {
-        id: msgId, text, fromId: null, ts,
+        id: msgId, text, fromId: extra.fromId || null, ts, username: author, author,
       }, activeDmChannelId);
+    });
+    div.querySelectorAll('.msg-reaction').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        socket.emit('react-dm-message', {
+          channelId: activeDmChannelId,
+          messageId: msgId,
+          emoji: btn.dataset.emoji,
+        });
+      });
     });
   }
   return div;
@@ -1006,8 +1044,8 @@ function createBlockedGroup(msgs, resolve) {
   const body = document.createElement('div');
   body.className = 'blocked-msg-body hidden';
   for (const msg of msgs) {
-    const { author, text, ts, id } = resolve(msg);
-    body.appendChild(makeMsgEl(author, text, ts, id));
+    const meta = resolve(msg);
+    body.appendChild(makeMsgEl(meta.author, meta.text, meta.ts, meta.id, meta));
   }
 
   let expanded = false;
@@ -1028,8 +1066,8 @@ function createBlockedGroup(msgs, resolve) {
 
 function pushIntoBlockedGroup(group, msg, resolve) {
   const body = group.querySelector('.blocked-msg-body');
-  const { author, text, ts, id } = resolve(msg);
-  body.appendChild(makeMsgEl(author, text, ts, id));
+  const meta = resolve(msg);
+  body.appendChild(makeMsgEl(meta.author, meta.text, meta.ts, meta.id, meta));
   const count = body.children.length;
   group.dataset.count = String(count);
   const expanded = group.dataset.expanded === '1';
@@ -1047,7 +1085,7 @@ function appendResolvedMessage(container, msg, resolve) {
       container.appendChild(createBlockedGroup([msg], resolve));
     }
   } else {
-    container.appendChild(makeMsgEl(meta.author, meta.text, meta.ts, meta.id));
+    container.appendChild(makeMsgEl(meta.author, meta.text, meta.ts, meta.id, meta));
   }
   container.scrollTop = container.scrollHeight;
 }
@@ -1065,7 +1103,7 @@ function renderMessageList(container, messages, resolve) {
       }
       container.appendChild(createBlockedGroup(group, resolve));
     } else {
-      container.appendChild(makeMsgEl(meta.author, meta.text, meta.ts, meta.id));
+      container.appendChild(makeMsgEl(meta.author, meta.text, meta.ts, meta.id, meta));
       i += 1;
     }
   }
@@ -1079,6 +1117,9 @@ function resolveChannelMsg(msg) {
     text: msg.text,
     ts: msg.ts,
     id: msg.id,
+    fromId: msg.userId,
+    reactions: msg.reactions || {},
+    replyTo: msg.replyTo || null,
   };
 }
 
@@ -1101,6 +1142,9 @@ function resolveDmMsg(msg, friendId) {
     text: msg.text,
     ts: msg.ts,
     id: msg.id,
+    fromId: msg.fromId,
+    reactions: msg.reactions || {},
+    replyTo: msg.replyTo || null,
   };
 }
 
@@ -1274,9 +1318,19 @@ $('dm-form').addEventListener('submit', (e) => {
   const input = $('dm-input');
   const text = input.value.trim();
   if (!text || (!activeDmFriendId && !activeGroupId)) return;
+  const replyTo = dmFeatures?.getReplyDraft?.() || dmReply;
+  const payload = replyTo ? {
+    replyTo: {
+      id: replyTo.id,
+      fromId: replyTo.fromId,
+      text: replyTo.text,
+      username: replyTo.username,
+    },
+  } : {};
   if (activeGroupId) {
     input.value = '';
-    socket.emit('send-dm', { channelId: activeGroupId, text }, (res) => {
+    dmFeatures?.clearReply?.();
+    socket.emit('send-dm', { channelId: activeGroupId, text, ...payload }, (res) => {
       if (res.error) { toast(res.error); return; }
       appendResolvedMessage($('dm-messages'), res.message, (m) => resolveDmMsg(m, null));
     });
@@ -1289,7 +1343,8 @@ $('dm-form').addEventListener('submit', (e) => {
     return;
   }
   input.value = '';
-  socket.emit('send-dm', { friendId: activeDmFriendId, text }, (res) => {
+  dmFeatures?.clearReply?.();
+  socket.emit('send-dm', { friendId: activeDmFriendId, text, ...payload }, (res) => {
     if (res.error) { toast(res.error); return; }
     appendResolvedMessage($('dm-messages'), res.message, (m) => resolveDmMsg(m, activeDmFriendId));
   });
@@ -2447,8 +2502,37 @@ function connectSocket(token) {
   socket.on('dm-pins-updated', ({ channelId, pins }) => {
     if (channelId === activeDmChannelId) {
       dmPins = pins || [];
-      if (!$('dm-pins-panel')?.classList.contains('hidden')) dmFeatures?.renderPins?.(dmPins);
+      if (dmPanelMode === 'pins') dmFeatures?.renderPins?.(dmPins);
     }
+  });
+
+  socket.on('dm-reaction', ({ channelId, messageId, reactions }) => {
+    if (channelId !== activeDmChannelId || activeView !== 'dm') return;
+    const el = document.querySelector(`[data-msg-id="${CSS.escape(messageId)}"]`);
+    if (!el) return;
+    // Mesajı yeniden çizmek için channel geçmişini tazelemek yerine tepki satırını güncelle
+    const body = el.querySelector('.msg-body');
+    if (!body) return;
+    body.querySelector('.msg-reactions')?.remove();
+    const entries = Object.entries(reactions || {}).filter(([, users]) => users?.length);
+    if (!entries.length) return;
+    const wrap = document.createElement('div');
+    wrap.className = 'msg-reactions';
+    wrap.innerHTML = entries.map(([emoji, users]) => {
+      const mine = users.includes(currentUser?.id);
+      return `<button type="button" class="msg-reaction${mine ? ' mine' : ''}" data-emoji="${escapeHtml(emoji)}">${emoji} <span>${users.length}</span></button>`;
+    }).join('');
+    wrap.querySelectorAll('.msg-reaction').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        socket.emit('react-dm-message', {
+          channelId: activeDmChannelId,
+          messageId,
+          emoji: btn.dataset.emoji,
+        });
+      });
+    });
+    body.appendChild(wrap);
   });
 
   socket.on('dm-call-update', ({ channelId, participants }) => {
@@ -2595,16 +2679,25 @@ async function ensureVoiceManagerForDm() {
 async function startDmCall() {
   if (!activeDmChannelId) { toast('Önce bir DM aç.'); return; }
   if (dmCallActive) return;
+  // Önceki oturumdan kalan kamerayı kapat
+  if (voiceManager?.isCameraOn?.()) {
+    try { await voiceManager.toggleCamera(); } catch {}
+  }
   await ensureVoiceManagerForDm();
   socket.emit('join-dm-call', { channelId: activeDmChannelId }, async (res) => {
     if (res?.error) { toast(res.error); return; }
     try {
       await voiceManager.join(activeDmChannelId, res.participants || []);
+      // Katılırken kamera kapalı kalsın
+      if (voiceManager.isCameraOn()) {
+        try { await voiceManager.toggleCamera(); } catch {}
+      }
       dmCallActive = true;
       const name = activeGroupTitle || friends.find((f) => f.id === activeDmFriendId)?.username || 'DM';
       dmFeatures?.updateCallStage?.(name);
       dmFeatures?.showCallStage?.(true);
       showVoiceFooter(name);
+      $('dm-call-cam')?.classList.add('off');
     } catch (err) {
       toast(err?.message || 'Arama başlatılamadı');
     }
@@ -2638,6 +2731,7 @@ dmFeatures = initDmFeatures({
   setState: (patch) => {
     if ('dmProfileOpen' in patch) dmProfileOpen = patch.dmProfileOpen;
     if ('dmPins' in patch) dmPins = patch.dmPins;
+    if ('dmPanelMode' in patch) dmPanelMode = patch.dmPanelMode;
   },
   openGroupChannel,
   openDM,
@@ -2653,6 +2747,7 @@ dmFeatures = initDmFeatures({
   ctxSep,
   showModal,
   closeModal,
+  markReply: (draft) => { dmReply = draft; },
 });
 
 /* ================= PWA ================= */
