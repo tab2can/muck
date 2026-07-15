@@ -331,20 +331,28 @@ function renderFriendsMain() {
   list.innerHTML = '';
 
   if (friendsTab === 'pending') {
-    label.textContent = `Bekleyen — ${pendingCount() + (friendRequests.outgoing?.length || 0)}`;
-    for (const r of friendRequests.incoming || []) {
-      if (q && !r.user.username.toLowerCase().includes(q)) continue;
-      list.appendChild(makePendingRow(r, 'incoming'));
+    label.classList.add('hidden');
+    const incoming = (friendRequests.incoming || []).filter((r) => !q || r.user.username.toLowerCase().includes(q));
+    const outgoing = (friendRequests.outgoing || []).filter((r) => !q || r.user.username.toLowerCase().includes(q));
+
+    if (incoming.length) {
+      list.appendChild(makeFriendsSectionHeader('Alındı', incoming.length, {
+        actionLabel: 'Tümünü temizle',
+        onAction: () => clearIncomingRequests(),
+      }));
+      for (const r of incoming) list.appendChild(makePendingRow(r, 'incoming'));
     }
-    for (const r of friendRequests.outgoing || []) {
-      if (q && !r.user.username.toLowerCase().includes(q)) continue;
-      list.appendChild(makePendingRow(r, 'outgoing'));
+    if (outgoing.length) {
+      list.appendChild(makeFriendsSectionHeader('Gönderildi', outgoing.length));
+      for (const r of outgoing) list.appendChild(makePendingRow(r, 'outgoing'));
     }
-    empty.classList.toggle('hidden', list.children.length > 0);
+
+    empty.classList.toggle('hidden', incoming.length + outgoing.length > 0);
     empty.textContent = 'Bekleyen istek yok.';
     return;
   }
 
+  label.classList.remove('hidden');
   let rows = [...friends];
   if (friendsTab === 'online') rows = rows.filter((f) => f.online);
   if (q) rows = rows.filter((f) => f.username.toLowerCase().includes(q));
@@ -355,25 +363,90 @@ function renderFriendsMain() {
     : `Tümü — ${rows.length}`;
 
   for (const f of rows) {
-    const li = document.createElement('li');
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'friend-row';
-    btn.innerHTML = `
-      ${userChipHtml(f.username, !!f.online, { size: 'md' })}`;
-    btn.addEventListener('click', () => openDM(f.id));
-    li.appendChild(btn);
-    list.appendChild(li);
+    list.appendChild(makeFriendListRow(f));
   }
   empty.classList.toggle('hidden', rows.length > 0);
   empty.textContent = friendsTab === 'online' ? 'Çevrimiçi arkadaş yok.' : 'Henüz arkadaşın yok.';
 }
 
-function makePendingRow(r, kind) {
+function makeFriendsSectionHeader(title, count, { actionLabel, onAction } = {}) {
+  const li = document.createElement('li');
+  li.className = 'friends-section-head';
+  const left = document.createElement('span');
+  left.textContent = `${title} — ${count}`;
+  li.appendChild(left);
+  if (actionLabel && onAction) {
+    const a = document.createElement('button');
+    a.type = 'button';
+    a.className = 'friends-section-action';
+    a.textContent = actionLabel;
+    a.addEventListener('click', onAction);
+    li.appendChild(a);
+  }
+  return li;
+}
+
+function clearIncomingRequests() {
+  const list = [...(friendRequests.incoming || [])];
+  if (!list.length) return;
+  let left = list.length;
+  for (const r of list) {
+    socket.emit('friend-decline', { requestId: r.id }, () => {
+      left -= 1;
+      if (left <= 0) toast('Gelen istekler temizlendi');
+    });
+  }
+}
+
+function friendIconBtn(title, svg, onClick) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'friend-icon-btn';
+  b.title = title;
+  b.setAttribute('aria-label', title);
+  b.innerHTML = svg;
+  b.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onClick(e, b);
+  });
+  return b;
+}
+
+const ICON_MSG = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M4 4h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H8l-4 4v-4H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"/></svg>`;
+const ICON_MORE = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="12" cy="5" r="1.8" fill="currentColor"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="12" cy="19" r="1.8" fill="currentColor"/></svg>`;
+const ICON_CHECK = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="M5 12.5 10 17l9-10"/></svg>`;
+const ICON_X = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M7 7l10 10M17 7 7 17"/></svg>`;
+
+function makeFriendListRow(f) {
   const li = document.createElement('li');
   const row = document.createElement('div');
   row.className = 'friend-row';
-  row.style.cursor = 'default';
+  row.dataset.allowMenu = '1';
+  row.innerHTML = `${userChipHtml(f.username, !!f.online, { size: 'md' })}<span class="friend-row-actions"></span>`;
+  const actions = row.querySelector('.friend-row-actions');
+  actions.append(
+    friendIconBtn('Mesaj', ICON_MSG, () => openDM(f.id)),
+    friendIconBtn('Diğer', ICON_MORE, (e, btn) => openFriendMoreMenu(btn, f)),
+  );
+  row.addEventListener('click', (e) => {
+    if (e.target.closest('.friend-row-actions')) return;
+    openDM(f.id);
+  });
+  row.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    openFriendsListContextMenu(e.clientX, e.clientY, f);
+  });
+  li.appendChild(row);
+  return li;
+}
+
+function makePendingRow(r, kind) {
+  const li = document.createElement('li');
+  const row = document.createElement('div');
+  row.className = 'friend-row friend-row--pending';
+  row.dataset.allowMenu = '1';
   row.innerHTML = `
     ${userChipHtml(r.user.username, false, {
       subtitle: kind === 'incoming' ? 'Gelen istek' : 'Giden istek',
@@ -382,44 +455,224 @@ function makePendingRow(r, kind) {
     <span class="friend-row-actions"></span>`;
   const actions = row.querySelector('.friend-row-actions');
   if (kind === 'incoming') {
-    const accept = document.createElement('button');
-    accept.className = 'friend-action accept';
-    accept.textContent = 'Kabul';
-    accept.addEventListener('click', () => {
-      socket.emit('friend-accept', { requestId: r.id }, (res) => {
-        if (res.error) { toast(res.error); return; }
-        if (res.friend) {
-          const idx = friends.findIndex((f) => f.id === res.friend.id);
-          if (idx >= 0) friends[idx] = res.friend; else friends.push(res.friend);
-        }
-        toast(`${r.user.username} arkadaş eklendi`);
-        renderFriends();
-      });
-    });
-    const decline = document.createElement('button');
-    decline.className = 'friend-action decline';
-    decline.textContent = 'Reddet';
-    decline.addEventListener('click', () => {
-      socket.emit('friend-decline', { requestId: r.id }, (res) => {
-        if (res.error) { toast(res.error); return; }
-        toast('İstek reddedildi');
-      });
-    });
-    actions.append(accept, decline);
+    actions.append(
+      friendIconBtn('Kabul et', ICON_CHECK, () => acceptFriendRequest(r)),
+      friendIconBtn('Reddet', ICON_X, () => declineFriendRequest(r, 'İstek reddedildi')),
+    );
   } else {
-    const cancel = document.createElement('button');
-    cancel.className = 'friend-action decline';
-    cancel.textContent = 'İptal';
-    cancel.addEventListener('click', () => {
-      socket.emit('friend-decline', { requestId: r.id }, (res) => {
-        if (res.error) { toast(res.error); return; }
-        toast('İstek iptal edildi');
-      });
-    });
-    actions.append(cancel);
+    actions.append(
+      friendIconBtn('İptal', ICON_X, () => declineFriendRequest(r, 'İstek iptal edildi')),
+    );
   }
+  row.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    openPendingContextMenu(e.clientX, e.clientY, r, kind);
+  });
   li.appendChild(row);
   return li;
+}
+
+function acceptFriendRequest(r) {
+  socket.emit('friend-accept', { requestId: r.id }, (res) => {
+    if (res.error) { toast(res.error); return; }
+    if (res.friend) {
+      const idx = friends.findIndex((f) => f.id === res.friend.id);
+      if (idx >= 0) friends[idx] = { ...friends[idx], ...res.friend };
+      else friends.push(res.friend);
+    }
+    toast(`${r.user.username} arkadaş eklendi`);
+    renderFriends();
+  });
+}
+
+function declineFriendRequest(r, okMsg) {
+  socket.emit('friend-decline', { requestId: r.id }, (res) => {
+    if (res.error) { toast(res.error); return; }
+    toast(okMsg || 'İstek güncellendi');
+  });
+}
+
+function appendInviteSubmenu(parentBtn, targetId, onDone) {
+  openSubmenu(parentBtn, (sub) => {
+    if (!servers.length) {
+      sub.appendChild(ctxItem({ label: 'Sunucu yok', disabled: true }));
+      return;
+    }
+    for (const s of servers) {
+      sub.appendChild(ctxItem({
+        label: s.name,
+        onClick: () => {
+          socket.emit('invite-to-server', { serverId: s.id, targetId }, (res) => {
+            closeCtxMenu();
+            if (res?.error) toast(res.error);
+            else toast('Davet gönderildi');
+            onDone?.();
+          });
+        },
+      }));
+    }
+  });
+}
+
+function openFriendMoreMenu(anchorBtn, friend) {
+  const menu = $('ctx-menu');
+  closeCtxMenu();
+  menu.appendChild(ctxItem({
+    label: 'Görüntülü Arama Başlat',
+    disabled: true,
+  }));
+  menu.appendChild(ctxItem({
+    label: 'Sesli Arama Başlat',
+    disabled: true,
+  }));
+  menu.appendChild(ctxItem({
+    label: 'Arkadaşı Çıkar',
+    danger: true,
+    onClick: () => {
+      closeCtxMenu();
+      confirmRemoveFriend(friend);
+    },
+  }));
+  const rect = anchorBtn.getBoundingClientRect();
+  placeCtxMenu(menu, rect.right - 200, rect.bottom + 4);
+}
+
+function openFriendsListContextMenu(x, y, friend) {
+  const menu = $('ctx-menu');
+  closeCtxMenu();
+  menu.appendChild(ctxItem({
+    label: 'Profil',
+    onClick: () => { closeCtxMenu(); openUserProfile(friend.id); },
+  }));
+  menu.appendChild(ctxItem({
+    label: 'Mesaj Gönder',
+    onClick: () => { closeCtxMenu(); openDM(friend.id); },
+  }));
+  menu.appendChild(ctxItem({ label: 'Bir Arama Başlat', disabled: true }));
+  menu.appendChild(ctxItem({
+    label: 'Not Ekle',
+    sub: 'Sadece sana görünür',
+    onClick: () => { closeCtxMenu(); openUserProfile(friend.id); },
+  }));
+  menu.appendChild(ctxSep());
+  const inviteBtn = ctxItem({ label: 'Sunucuya Davet Et', right: '›' });
+  inviteBtn.addEventListener('mouseenter', () => appendInviteSubmenu(inviteBtn, friend.id));
+  menu.appendChild(inviteBtn);
+  menu.appendChild(ctxItem({
+    label: 'Arkadaşı Çıkar',
+    onClick: () => { closeCtxMenu(); confirmRemoveFriend(friend); },
+  }));
+  menu.appendChild(ctxItem({
+    label: friend.ignored ? 'Yoksaymayı Kaldır' : 'Yok Say',
+    onClick: () => {
+      socket.emit('user-ignore', { targetId: friend.id, ignored: !friend.ignored }, () => closeCtxMenu());
+    },
+  }));
+  menu.appendChild(ctxItem({
+    label: friend.blocked ? 'Engeli kaldır' : 'Engelle',
+    danger: !friend.blocked,
+    onClick: () => {
+      closeCtxMenu();
+      if (friend.blocked) {
+        socket.emit('user-block', { targetId: friend.id, blocked: false });
+        return;
+      }
+      showModal('Engelle', `<p><strong>${escapeHtml(friend.username)}</strong> engellenecek. Bu kişiden gelen mesajlar gizlenir ve ona mesaj gönderemezsin.</p>`, [
+        { label: 'İptal', className: 'btn-secondary', onClick: closeModal },
+        {
+          label: 'Engelle', className: 'btn-danger', onClick: () => {
+            closeModal();
+            socket.emit('user-block', { targetId: friend.id, blocked: true });
+          },
+        },
+      ]);
+    },
+  }));
+  if (settings.developer) {
+    menu.appendChild(ctxSep());
+    menu.appendChild(ctxItem({
+      label: 'Kullanıcı ID\'sini Kopyala',
+      right: 'ID',
+      onClick: async () => {
+        closeCtxMenu();
+        try { await navigator.clipboard.writeText(String(friend.id)); toast('Kullanıcı ID kopyalandı'); }
+        catch { toast('Kopyalanamadı'); }
+      },
+    }));
+  }
+  placeCtxMenu(menu, x, y);
+}
+
+function openPendingContextMenu(x, y, request, kind) {
+  const menu = $('ctx-menu');
+  const user = request.user;
+  closeCtxMenu();
+  menu.appendChild(ctxItem({
+    label: 'Profil',
+    onClick: () => { closeCtxMenu(); openUserProfile(user.id); },
+  }));
+  menu.appendChild(ctxItem({
+    label: 'Mesaj Gönder',
+    onClick: () => {
+      closeCtxMenu();
+      toast('Mesaj göndermek için önce arkadaş olmalısınız.');
+    },
+  }));
+  menu.appendChild(ctxItem({ label: 'Bir Arama Başlat', disabled: true }));
+  menu.appendChild(ctxItem({
+    label: 'Not Ekle',
+    sub: 'Sadece sana görünür',
+    onClick: () => { closeCtxMenu(); openUserProfile(user.id); },
+  }));
+  menu.appendChild(ctxSep());
+  const inviteBtn = ctxItem({ label: 'Sunucuya Davet Et', right: '›' });
+  inviteBtn.addEventListener('mouseenter', () => appendInviteSubmenu(inviteBtn, user.id));
+  menu.appendChild(inviteBtn);
+  if (kind === 'incoming') {
+    menu.appendChild(ctxItem({
+      label: 'Arkadaşlık İsteğini Kabul Et',
+      onClick: () => { closeCtxMenu(); acceptFriendRequest(request); },
+    }));
+  }
+  menu.appendChild(ctxItem({
+    label: kind === 'incoming' ? 'Yok Say' : 'İsteği İptal Et',
+    onClick: () => {
+      closeCtxMenu();
+      declineFriendRequest(request, kind === 'incoming' ? 'İstek yoksayıldı' : 'İstek iptal edildi');
+    },
+  }));
+  menu.appendChild(ctxItem({
+    label: 'Engelle',
+    danger: true,
+    onClick: () => {
+      closeCtxMenu();
+      showModal('Engelle', `<p><strong>${escapeHtml(user.username)}</strong> engellenecek.</p>`, [
+        { label: 'İptal', className: 'btn-secondary', onClick: closeModal },
+        {
+          label: 'Engelle', className: 'btn-danger', onClick: () => {
+            closeModal();
+            socket.emit('user-block', { targetId: user.id, blocked: true }, () => {
+              declineFriendRequest(request, 'Engellendi');
+            });
+          },
+        },
+      ]);
+    },
+  }));
+  if (settings.developer) {
+    menu.appendChild(ctxSep());
+    menu.appendChild(ctxItem({
+      label: 'Kullanıcı ID\'sini Kopyala',
+      right: 'ID',
+      onClick: async () => {
+        closeCtxMenu();
+        try { await navigator.clipboard.writeText(String(user.id)); toast('Kullanıcı ID kopyalandı'); }
+        catch { toast('Kopyalanamadı'); }
+      },
+    }));
+  }
+  placeCtxMenu(menu, x, y);
 }
 
 function openFriendsView(tab = friendsTab, push = true) {
@@ -1379,12 +1632,17 @@ function placeCtxMenu(el, x, y) {
   el.style.top = `${top}px`;
 }
 
-function ctxItem({ label, danger, disabled, right, onClick }) {
+function ctxItem({ label, sub, danger, disabled, right, onClick }) {
   const btn = document.createElement('button');
   btn.type = 'button';
-  btn.className = 'ctx-item' + (danger ? ' danger' : '');
+  btn.className = 'ctx-item' + (danger ? ' danger' : '') + (sub ? ' ctx-item--stacked' : '');
   btn.disabled = !!disabled;
-  btn.innerHTML = `<span>${escapeHtml(label)}</span>${right ? `<span class="ctx-right">${escapeHtml(right)}</span>` : ''}`;
+  btn.innerHTML = `
+    <span class="ctx-item-text">
+      <span class="ctx-item-label">${escapeHtml(label)}</span>
+      ${sub ? `<span class="ctx-item-sub">${escapeHtml(sub)}</span>` : ''}
+    </span>
+    ${right ? `<span class="ctx-right">${escapeHtml(right)}</span>` : ''}`;
   if (onClick && !disabled) {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
