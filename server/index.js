@@ -127,6 +127,7 @@ function friendsSnapshot(userId) {
   return store.getFriends(userId).map((f) => {
     const act = store.getDmActivity(userId, f.id);
     const mutedUntil = social.mutedDms?.[f.id];
+    const bs = store.blockState(userId, f.id);
     return {
       id: f.id,
       username: f.username,
@@ -135,7 +136,8 @@ function friendsSnapshot(userId) {
       closed: (social.closedDms || []).includes(f.id),
       unread: !!social.unreadDms?.[f.id],
       ignored: (social.ignored || []).includes(f.id),
-      blocked: (social.blocked || []).includes(f.id),
+      blocked: bs.blockedByMe,
+      blockedByThem: bs.blockedByThem,
       mutedUntil: mutedUntil === undefined ? null : mutedUntil,
       lastMessageAt: act.lastMessageAt || 0,
       dmChannelId: act.dmChannelId,
@@ -455,15 +457,16 @@ io.on('connection', (socket) => {
     const friend = store.findById(friendId);
     const user = store.findById(userId);
     if (!friend || !user?.friends.includes(friendId)) return cb?.({ error: 'Arkadaş bulunamadı.' });
-    if (store.isBlockedEither(userId, friendId)) return cb?.({ error: 'Bu kullanıcıyla mesajlaşamazsınız.' });
     const channel = store.getOrCreateDMChannel(userId, friendId);
     store.reopenDm(userId, friendId);
     store.markDmRead(userId, friendId);
+    const bs = store.blockState(userId, friendId);
     cb?.({
       messages: store.getDMs(userId, friendId),
       friend: { id: friend.id, username: friend.username },
       dmChannelId: channel.id,
       social: store.getSocial(userId),
+      ...bs,
     });
     emitSocial(userId);
   });
@@ -477,12 +480,14 @@ io.on('connection', (socket) => {
     if (!friend || !user?.friends.includes(friendId)) return cb?.({ error: 'Arkadaş bulunamadı.' });
     store.reopenDm(userId, friendId);
     store.markDmRead(userId, friendId);
+    const bs = store.blockState(userId, friendId);
     cb?.({
       messages: store.getDMs(userId, friendId),
       friend: { id: friend.id, username: friend.username },
       friendId,
       dmChannelId: channel.id,
       social: store.getSocial(userId),
+      ...bs,
     });
     emitSocial(userId);
   });
@@ -491,7 +496,9 @@ io.on('connection', (socket) => {
     if (!text?.trim()) return cb?.({ error: 'Boş mesaj.' });
     const user = store.findById(userId);
     if (!user?.friends.includes(friendId)) return cb?.({ error: 'Arkadaş değil.' });
-    if (store.isBlockedEither(userId, friendId)) return cb?.({ error: 'Bu kullanıcıyla mesajlaşamazsınız.' });
+    const bs = store.blockState(userId, friendId);
+    if (bs.blockedByMe) return cb?.({ error: 'Engellediğin bir kullanıcıya mesaj gönderemezsin.' });
+    if (bs.blockedByThem) return cb?.({ error: 'Bu kullanıcıya mesaj gönderemezsin.' });
     const msg = store.pushDM(userId, friendId, text);
     const payload = { fromId: userId, username: socket.data.username, message: msg };
     const sockets = onlineUsers.get(friendId);
@@ -501,6 +508,7 @@ io.on('connection', (socket) => {
           friendId: userId,
           muted: store.isDmMuted(friendId, userId),
           ignored: !!store.getSocial(friendId)?.ignored?.includes(userId),
+          blocked: store.isBlockedBy(friendId, userId),
           ...payload,
         });
       }
@@ -545,10 +553,7 @@ io.on('connection', (socket) => {
     if (result.error) return cb?.({ error: result.error });
     cb?.(result);
     emitSocial(userId);
-    if (blocked) {
-      notifyFriendsOfChange(userId);
-      notifyFriendsOfChange(targetId);
-    }
+    emitSocial(targetId);
   });
   socket.on('friend-note', ({ friendId, note }, cb) => {
     const result = store.setFriendNote(userId, friendId, note);

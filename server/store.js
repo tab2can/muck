@@ -358,13 +358,22 @@ export function setBlocked(userId, targetId, blocked) {
   s.blocked = s.blocked.filter((id) => id !== targetId);
   if (blocked) {
     s.blocked.push(targetId);
-    s.ignored = s.ignored.filter((id) => id !== targetId);
-    if (!s.ignored.includes(targetId)) s.ignored.push(targetId);
-    // Arkadaşsa çıkar
-    if (user.friends.includes(targetId)) removeFriend(userId, targetId);
   }
   save();
   return { social: getSocial(userId) };
+}
+
+export function isBlockedBy(blockerId, targetId) {
+  const user = findById(blockerId);
+  if (!user) return false;
+  return ensureSocial(user).blocked.includes(targetId);
+}
+
+export function blockState(viewerId, targetId) {
+  return {
+    blockedByMe: isBlockedBy(viewerId, targetId),
+    blockedByThem: isBlockedBy(targetId, viewerId),
+  };
 }
 
 export function setFriendNote(userId, friendId, note) {

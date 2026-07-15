@@ -357,6 +357,27 @@ html[data-theme="light"] .voice-conn { background: #e8ebf2; }
 .chat-input { display: flex; gap: .5rem; padding: .75rem 1rem; border-top: 1px solid var(--border); flex: 0 0 auto; }
 .chat-input input { flex: 1; }
 
+.dm-blocked-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: .75rem;
+  margin: .75rem 1rem; padding: .7rem .9rem;
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface); color: var(--muted); font-size: .88rem;
+}
+.dm-blocked-bar .btn { flex: 0 0 auto; white-space: nowrap; font-size: .82rem; padding: .35rem .7rem; }
+
+.blocked-msg-group { margin: .15rem 0; }
+.blocked-msg-toggle {
+  display: flex; align-items: center; gap: .45rem;
+  border: none; background: transparent; color: var(--muted);
+  font-family: inherit; font-size: .85rem; padding: .25rem .15rem;
+  cursor: pointer; text-align: left; width: 100%;
+}
+.blocked-msg-toggle:hover { color: var(--text); }
+.blocked-msg-icon { flex: 0 0 auto; opacity: .75; }
+.blocked-msg-show { color: var(--accent); font-weight: 650; }
+.blocked-msg-body { display: flex; flex-direction: column; gap: .5rem; padding: .25rem 0 .35rem .25rem; }
+.blocked-msg-body.hidden { display: none; }
+
 /* Friends (@me) */
 .friends-head {
   display: flex; align-items: center; gap: .85rem; flex-wrap: wrap;

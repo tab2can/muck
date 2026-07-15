@@ -265,7 +265,7 @@ function renderFriends() {
   const list = $('dm-list');
   if (!list) return;
   list.innerHTML = '';
-  const visible = [...friends].filter((f) => !f.closed && !f.blocked);
+  const visible = [...friends].filter((f) => !f.closed);
   visible.sort((a, b) => {
     const ap = a.pinned ? 1 : 0;
     const bp = b.pinned ? 1 : 0;
@@ -558,6 +558,135 @@ function selectServer(serverId, channelId = null, push = true) {
 }
 
 /* ================= Text chat ================= */
+function isAuthorBlocked(authorId) {
+  if (!authorId || authorId === currentUser?.id) return false;
+  if ((social.blocked || []).includes(authorId)) return true;
+  const f = friends.find((x) => x.id === authorId);
+  return !!f?.blocked;
+}
+
+function makeMsgEl(author, text, ts) {
+  const div = document.createElement('div');
+  div.className = 'msg';
+  div.innerHTML = `
+    <span class="msg-avatar">${escapeHtml(initials(author))}</span>
+    <div class="msg-body">
+      <span class="msg-author">${escapeHtml(author || '—')}</span>
+      <span class="msg-time">${formatTime(ts)}</span>
+      <div class="msg-text">${escapeHtml(text)}</div>
+    </div>`;
+  return div;
+}
+
+function blockedToggleLabel(n, expanded) {
+  const verb = expanded ? 'Gizle' : 'Göster';
+  return `${n} engellenen mesaj — <span class="blocked-msg-show">${verb}</span>`;
+}
+
+function createBlockedGroup(msgs, resolve) {
+  const wrap = document.createElement('div');
+  wrap.className = 'blocked-msg-group';
+  wrap.dataset.count = String(msgs.length);
+
+  const toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'blocked-msg-toggle';
+  toggle.innerHTML = `
+    <svg class="blocked-msg-icon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/>
+      <path d="M7 7l10 10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+    </svg>
+    <span class="blocked-msg-label">${blockedToggleLabel(msgs.length, false)}</span>`;
+
+  const body = document.createElement('div');
+  body.className = 'blocked-msg-body hidden';
+  for (const msg of msgs) {
+    const { author, text, ts } = resolve(msg);
+    body.appendChild(makeMsgEl(author, text, ts));
+  }
+
+  let expanded = false;
+  toggle.addEventListener('click', () => {
+    expanded = !expanded;
+    wrap.dataset.expanded = expanded ? '1' : '0';
+    body.classList.toggle('hidden', !expanded);
+    toggle.querySelector('.blocked-msg-label').innerHTML = blockedToggleLabel(
+      Number(wrap.dataset.count) || body.children.length,
+      expanded
+    );
+  });
+
+  wrap.appendChild(toggle);
+  wrap.appendChild(body);
+  return wrap;
+}
+
+function pushIntoBlockedGroup(group, msg, resolve) {
+  const body = group.querySelector('.blocked-msg-body');
+  const { author, text, ts } = resolve(msg);
+  body.appendChild(makeMsgEl(author, text, ts));
+  const count = body.children.length;
+  group.dataset.count = String(count);
+  const expanded = group.dataset.expanded === '1';
+  const label = group.querySelector('.blocked-msg-label');
+  if (label) label.innerHTML = blockedToggleLabel(count, expanded);
+}
+
+function appendResolvedMessage(container, msg, resolve) {
+  const meta = resolve(msg);
+  if (isAuthorBlocked(meta.authorId)) {
+    const last = container.lastElementChild;
+    if (last?.classList.contains('blocked-msg-group')) {
+      pushIntoBlockedGroup(last, msg, resolve);
+    } else {
+      container.appendChild(createBlockedGroup([msg], resolve));
+    }
+  } else {
+    container.appendChild(makeMsgEl(meta.author, meta.text, meta.ts));
+  }
+  container.scrollTop = container.scrollHeight;
+}
+
+function renderMessageList(container, messages, resolve) {
+  container.innerHTML = '';
+  let i = 0;
+  while (i < messages.length) {
+    const msg = messages[i];
+    const meta = resolve(msg);
+    if (isAuthorBlocked(meta.authorId)) {
+      const group = [];
+      while (i < messages.length && isAuthorBlocked(resolve(messages[i]).authorId)) {
+        group.push(messages[i++]);
+      }
+      container.appendChild(createBlockedGroup(group, resolve));
+    } else {
+      container.appendChild(makeMsgEl(meta.author, meta.text, meta.ts));
+      i += 1;
+    }
+  }
+  container.scrollTop = container.scrollHeight;
+}
+
+function resolveChannelMsg(msg) {
+  return {
+    authorId: msg.userId,
+    author: msg.username || '—',
+    text: msg.text,
+    ts: msg.ts,
+  };
+}
+
+function resolveDmMsg(msg, friendId) {
+  const isMe = msg.fromId === currentUser?.id;
+  const friend = friends.find((f) => f.id === friendId);
+  return {
+    authorId: msg.fromId,
+    author: isMe ? currentUser.username : (friend?.username || '—'),
+    text: msg.text,
+    ts: msg.ts,
+  };
+}
+
 function openTextChannel(channelId, name, push = true) {
   activeChannelId = channelId;
   activeDmFriendId = null;
@@ -568,32 +697,35 @@ function openTextChannel(channelId, name, push = true) {
   renderChannels();
   socket.emit('open-text-channel', { channelId }, (res) => {
     if (res.error) { toast(res.error); return; }
-    renderMessages($('chat-messages'), res.messages);
+    renderMessageList($('chat-messages'), res.messages || [], resolveChannelMsg);
   });
   if (push && activeServer) navTo(`/channels/${activeServer.id}/${channelId}`);
   closeDrawers();
 }
 
-function renderMessages(container, messages) {
-  container.innerHTML = '';
-  for (const msg of messages) {
-    appendMessage(container, msg);
-  }
-  container.scrollTop = container.scrollHeight;
+function appendMessage(container, msg) {
+  appendResolvedMessage(container, msg, resolveChannelMsg);
 }
 
-function appendMessage(container, msg) {
-  const div = document.createElement('div');
-  div.className = 'msg';
-  div.innerHTML = `
-    <span class="msg-avatar">${escapeHtml(initials(msg.username || currentUser?.username))}</span>
-    <div class="msg-body">
-      <span class="msg-author">${escapeHtml(msg.username || '—')}</span>
-      <span class="msg-time">${formatTime(msg.ts)}</span>
-      <div class="msg-text">${escapeHtml(msg.text)}</div>
-    </div>`;
-  container.appendChild(div);
-  container.scrollTop = container.scrollHeight;
+function updateDmComposer() {
+  const form = $('dm-form');
+  const bar = $('dm-blocked-bar');
+  const unblockBtn = $('dm-unblock-btn');
+  if (!form || !bar) return;
+  const f = friends.find((x) => x.id === activeDmFriendId);
+  const blockedByMe = !!(f?.blocked || (activeDmFriendId && (social.blocked || []).includes(activeDmFriendId)));
+  const blockedByThem = !!f?.blockedByThem;
+  const locked = blockedByMe || blockedByThem;
+  form.classList.toggle('hidden', locked);
+  bar.classList.toggle('hidden', !locked);
+  if (!locked) return;
+  if (blockedByMe) {
+    $('dm-blocked-text').textContent = 'Engellediğin bir kullanıcıya mesaj gönderemezsin.';
+    unblockBtn?.classList.remove('hidden');
+  } else {
+    $('dm-blocked-text').textContent = 'Bu kullanıcıya mesaj gönderemezsin.';
+    unblockBtn?.classList.add('hidden');
+  }
 }
 
 $('chat-form').addEventListener('submit', (e) => {
@@ -612,7 +744,6 @@ function openDM(friendId, push = true) {
   activeServer = null;
   activeDmFriendId = friendId;
   activeChannelId = null;
-  // Açınca okundu + closed kaldırılır (server emitSocial)
   friend.unread = false;
   friend.closed = false;
   showSidebarHome();
@@ -620,18 +751,23 @@ function openDM(friendId, push = true) {
   $('dm-title').textContent = `@ ${friend.username}`;
   $('dm-messages').innerHTML = '';
   setMainView('dm');
+  updateDmComposer();
   renderFriends();
   socket.emit('open-dm', { friendId }, (res) => {
     if (res.error) { toast(res.error); return; }
     activeDmChannelId = res.dmChannelId;
     if (res.social) social = res.social;
+    if (friend) {
+      friend.blocked = !!res.blockedByMe;
+      friend.blockedByThem = !!res.blockedByThem;
+    }
+    updateDmComposer();
     renderDMMessages(res.messages, friendId);
     if (push) navTo(`/channels/@me/${res.dmChannelId}`);
   });
   closeDrawers();
 }
 
-// Deep-link/geri-ileri: DM'yi kanal id'sinden aç.
 function openDMByChannel(dmChannelId, push = false) {
   socket.emit('get-dm-by-channel', { dmChannelId }, (res) => {
     if (res.error) { toast(res.error); goHome(false); navTo('/channels/@me'); return; }
@@ -639,12 +775,19 @@ function openDMByChannel(dmChannelId, push = false) {
     activeChannelId = null;
     activeDmFriendId = res.friendId;
     activeDmChannelId = res.dmChannelId;
+    if (res.social) social = res.social;
+    const friend = friends.find((f) => f.id === res.friendId);
+    if (friend) {
+      friend.blocked = !!res.blockedByMe;
+      friend.blockedByThem = !!res.blockedByThem;
+    }
     showSidebarHome();
     setRailActive('home');
     renderFriends();
     $('dm-title').textContent = `@ ${res.friend.username}`;
     $('dm-messages').innerHTML = '';
     setMainView('dm');
+    updateDmComposer();
     renderDMMessages(res.messages, res.friendId);
     if (push) navTo(`/channels/@me/${res.dmChannelId}`);
     closeDrawers();
@@ -652,23 +795,7 @@ function openDMByChannel(dmChannelId, push = false) {
 }
 
 function renderDMMessages(messages, friendId) {
-  const container = $('dm-messages');
-  container.innerHTML = '';
-  for (const msg of messages) {
-    const isMe = msg.fromId === currentUser.id;
-    const div = document.createElement('div');
-    div.className = 'msg';
-    const author = isMe ? currentUser.username : friends.find((f) => f.id === friendId)?.username;
-    div.innerHTML = `
-      <span class="msg-avatar">${escapeHtml(initials(author))}</span>
-      <div class="msg-body">
-        <span class="msg-author">${escapeHtml(author)}</span>
-        <span class="msg-time">${formatTime(msg.ts)}</span>
-        <div class="msg-text">${escapeHtml(msg.text)}</div>
-      </div>`;
-    container.appendChild(div);
-  }
-  container.scrollTop = container.scrollHeight;
+  renderMessageList($('dm-messages'), messages || [], (msg) => resolveDmMsg(msg, friendId));
 }
 
 $('dm-form').addEventListener('submit', (e) => {
@@ -676,20 +803,23 @@ $('dm-form').addEventListener('submit', (e) => {
   const input = $('dm-input');
   const text = input.value.trim();
   if (!text || !activeDmFriendId) return;
+  const f = friends.find((x) => x.id === activeDmFriendId);
+  if (f?.blocked || f?.blockedByThem) {
+    toast(f.blocked ? 'Engellediğin bir kullanıcıya mesaj gönderemezsin.' : 'Bu kullanıcıya mesaj gönderemezsin.');
+    updateDmComposer();
+    return;
+  }
   input.value = '';
   socket.emit('send-dm', { friendId: activeDmFriendId, text }, (res) => {
     if (res.error) { toast(res.error); return; }
-    const div = document.createElement('div');
-    div.className = 'msg';
-    div.innerHTML = `
-      <span class="msg-avatar">${escapeHtml(initials(currentUser.username))}</span>
-      <div class="msg-body">
-        <span class="msg-author">${escapeHtml(currentUser.username)}</span>
-        <span class="msg-time">${formatTime(res.message.ts)}</span>
-        <div class="msg-text">${escapeHtml(res.message.text)}</div>
-      </div>`;
-    $('dm-messages').appendChild(div);
-    $('dm-messages').scrollTop = $('dm-messages').scrollHeight;
+    appendResolvedMessage($('dm-messages'), res.message, (m) => resolveDmMsg(m, activeDmFriendId));
+  });
+});
+
+$('dm-unblock-btn')?.addEventListener('click', () => {
+  if (!activeDmFriendId) return;
+  socket.emit('user-block', { targetId: activeDmFriendId, blocked: false }, () => {
+    openDM(activeDmFriendId, false);
   });
 });
 
@@ -1364,21 +1494,23 @@ function openDmContextMenu(x, y, friend) {
     },
   }));
   menu.appendChild(ctxItem({
-    label: friend.blocked ? 'Engeli Kaldır' : 'Engelle',
-    danger: true,
+    label: friend.blocked ? 'Engeli kaldır' : 'Engelle',
+    danger: !friend.blocked,
     onClick: () => {
       closeCtxMenu();
       if (friend.blocked) {
-        socket.emit('user-block', { targetId: friend.id, blocked: false });
+        socket.emit('user-block', { targetId: friend.id, blocked: false }, () => {
+          if (activeDmFriendId === friend.id) openDM(friend.id, false);
+        });
         return;
       }
-      showModal('Engelle', `<p><strong>${escapeHtml(friend.username)}</strong> engellenecek. Arkadaşlıktan çıkarılır ve mesajlaşamazsınız.</p>`, [
+      showModal('Engelle', `<p><strong>${escapeHtml(friend.username)}</strong> engellenecek. Bu kişiden gelen mesajlar gizlenir ve ona mesaj gönderemezsin.</p>`, [
         { label: 'İptal', className: 'btn-secondary', onClick: closeModal },
         {
           label: 'Engelle', className: 'btn-danger', onClick: () => {
             closeModal();
             socket.emit('user-block', { targetId: friend.id, blocked: true }, () => {
-              if (activeDmFriendId === friend.id) openFriendsView();
+              if (activeDmFriendId === friend.id) openDM(friend.id, false);
             });
           },
         },
@@ -1562,12 +1694,14 @@ function openProfileMoreMenu(btn) {
     },
   }));
   menu.appendChild(ctxItem({
-    label: p.blocked ? 'Engeli Kaldır' : 'Engelle',
-    danger: true,
+    label: p.blocked ? 'Engeli kaldır' : 'Engelle',
+    danger: !p.blocked,
     onClick: () => {
       closeCtxMenu();
       socket.emit('user-block', { targetId: p.user.id, blocked: !p.blocked }, () => {
-        closeUserProfile();
+        p.blocked = !p.blocked;
+        if (activeDmFriendId === p.user.id) openDM(p.user.id, false);
+        else renderProfileModal();
       });
     },
   }));
@@ -1670,7 +1804,16 @@ function connectSocket(token) {
     if (soc) social = soc;
     if (fr) friends = fr;
     renderFriends();
-    if (activeView === 'dm' && activeDmFriendId) renderProfile();
+    if (activeView === 'dm' && activeDmFriendId) {
+      renderProfile();
+      updateDmComposer();
+    }
+    if (activeView === 'chat' && activeChannelId) {
+      socket.emit('open-text-channel', { channelId: activeChannelId }, (res) => {
+        if (res?.error) return;
+        renderMessageList($('chat-messages'), res.messages || [], resolveChannelMsg);
+      });
+    }
   });
 
   socket.on('friend-update', (f) => {
@@ -1699,21 +1842,11 @@ function connectSocket(token) {
     }
   });
 
-  socket.on('dm', ({ friendId, username, message, muted, ignored }) => {
+  socket.on('dm', ({ friendId, username, message, muted, ignored, blocked }) => {
     if (activeDmFriendId === friendId && activeView === 'dm') {
-      const div = document.createElement('div');
-      div.className = 'msg';
-      div.innerHTML = `
-        <span class="msg-avatar">${escapeHtml(initials(username))}</span>
-        <div class="msg-body">
-          <span class="msg-author">${escapeHtml(username)}</span>
-          <span class="msg-time">${formatTime(message.ts)}</span>
-          <div class="msg-text">${escapeHtml(message.text)}</div>
-        </div>`;
-      $('dm-messages').appendChild(div);
-      $('dm-messages').scrollTop = $('dm-messages').scrollHeight;
-      socket.emit('dm-read', { friendId });
-    } else if (!muted && !ignored) {
+      appendResolvedMessage($('dm-messages'), message, (m) => resolveDmMsg(m, friendId));
+      if (!blocked) socket.emit('dm-read', { friendId });
+    } else if (!muted && !ignored && !blocked) {
       toast(`${username}: yeni mesaj`);
     }
   });
