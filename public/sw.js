@@ -1,4 +1,4 @@
-const CACHE = 'muck-v17';
+const CACHE = 'muck-v18';
 const PRECACHE = ['/icon.png', '/manifest.webmanifest'];
 
 self.addEventListener('install', (event) => {

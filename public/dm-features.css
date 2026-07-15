@@ -70,10 +70,10 @@
   gap: .55rem; padding: .75rem .75rem .65rem;
   background: linear-gradient(180deg, var(--surface) 0%, var(--bg) 100%);
   border-bottom: 1px solid var(--border);
-  min-height: 0;
+  min-height: 240px;
   max-height: min(52vh, 520px);
 }
-.dm-call-stage.ringing { min-height: 200px; }
+.dm-call-stage.ringing { min-height: 260px; }
 .dm-call-banner {
   display: flex; align-items: center; gap: .75rem;
   padding: .35rem .25rem 0;
@@ -87,11 +87,16 @@
 .dm-call-banner-text { min-width: 0; }
 .dm-call-name { font-weight: 800; font-size: 1rem; }
 .dm-call-status { color: var(--muted); font-size: .85rem; }
+/* voice-grid flex:1 sunucu görünümüne ait — DM'de sabit yükseklik, boş siyah alan olmasın */
+#dm-voice-grid.voice-grid,
 .dm-voice-grid {
-  flex: 1 1 auto;
-  min-height: 160px;
+  flex: 0 0 auto !important;
+  width: 100%;
+  height: min(36vh, 340px);
+  min-height: 200px;
   max-height: min(42vh, 420px);
   padding: .35rem .15rem;
+  background: transparent;
 }
 .dm-call-controls {
   display: flex; align-items: center; justify-content: center; gap: .5rem;

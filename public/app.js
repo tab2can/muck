@@ -1495,12 +1495,40 @@ let voiceResizeBound = false;
 let pendingVoiceRender = false;
 
 function voiceUiActive() {
-  return activeView === 'voice' || dmCallActive;
+  return activeView === 'voice' || dmCallActive || dmCallRinging;
 }
 
 function getActiveVoiceGrid() {
-  if (dmCallActive) return $('dm-voice-grid');
+  if (dmCallActive || dmCallRinging) return $('dm-voice-grid');
   return $('voice-grid');
+}
+
+function emptyVoiceState() {
+  return {
+    local: {
+      muted: !!voiceManager?.isMuted?.(),
+      deafened: !!voiceManager?.isDeafened?.(),
+      cameraOn: !!voiceManager?.isCameraOn?.(),
+      screenOn: !!voiceManager?.isScreenOn?.(),
+      cameraStream: voiceManager?.isCameraOn?.() ? voiceManager.getCameraStream?.() : null,
+      screenStream: voiceManager?.isScreenOn?.() ? voiceManager.getScreenStream?.() : null,
+    },
+    remote: [],
+  };
+}
+
+function paintVoiceGrid(state = null) {
+  const next = state || lastVoiceState || emptyVoiceState();
+  renderVoiceGrid(next);
+  // Layout henüz ölçülmediyse bir kare sonra yeniden çiz (DM stage açılınca 0x0 kalmasın)
+  requestAnimationFrame(() => {
+    if (!voiceUiActive()) return;
+    const grid = getActiveVoiceGrid();
+    if (!grid) return;
+    if (!grid.querySelector('.voice-tile') || grid.clientWidth < 40) {
+      renderVoiceGrid(lastVoiceState || next);
+    }
+  });
 }
 
 function renderVoiceGrid(state) {
@@ -1542,21 +1570,34 @@ function renderVoiceGrid(state) {
 
   grid.classList.remove('maximized');
   // Kişi/kutu sayısına göre otomatik sütun düzeni; kutular 16/9 oranını korur.
-  const n = tiles.length;
+  const n = Math.max(1, tiles.length);
   const cols = Math.ceil(Math.sqrt(n));
   grid.style.gridTemplateRows = '';
   // Kutu boyutunu, hem genişliğe hem yüksekliğe sığacak şekilde sınırla.
   const gap = 0.6 * 16; // rem -> px
   const pad = 0.8 * 16 * 2;
-  const availW = Math.max(120, grid.clientWidth - pad);
-  const availH = Math.max(100, grid.clientHeight - pad);
+  const availW = Math.max(160, (grid.clientWidth || grid.parentElement?.clientWidth || 320) - pad);
+  const availH = Math.max(120, (grid.clientHeight || 200) - pad);
   const rows = Math.ceil(n / cols);
   const wByCols = (availW - gap * (cols - 1)) / cols;
   const hByRows = (availH - gap * (rows - 1)) / rows;
   const wByRows = hByRows * (16 / 9); // yüksekliğe göre izin verilen genişlik
-  const tileW = Math.max(120, Math.floor(Math.min(wByCols, wByRows)));
+  let tileW = Math.floor(Math.min(wByCols, wByRows));
+  if (!Number.isFinite(tileW) || tileW < 120) tileW = 160;
   grid.style.gridTemplateColumns = `repeat(${cols}, ${tileW}px)`;
-  for (const t of tiles) grid.appendChild(makeVoiceTile(t));
+  if (!tiles.length) {
+    grid.appendChild(makeVoiceTile({
+      key: 'self',
+      label: `${currentUser?.username || 'Sen'} (sen)`,
+      initials: initials(currentUser?.username),
+      stream: null,
+      isScreen: false,
+      muted: false,
+      self: true,
+    }));
+  } else {
+    for (const t of tiles) grid.appendChild(makeVoiceTile(t));
+  }
 }
 
 function showVoiceFooter(channelName) {
@@ -2737,7 +2778,7 @@ async function ensureVoiceManagerForDm() {
     socket,
     username: currentUser?.username,
     onUpdate: (state) => {
-      if (dmCallActive) renderVoiceGrid(state);
+      if (dmCallActive || dmCallRinging) paintVoiceGrid(state);
       syncDmCallControls();
     },
     onSpeaking: (flags) => {
@@ -2794,6 +2835,20 @@ async function enterDmCallMedia({ ringing = false } = {}) {
     voiceManager = null;
   }
   await ensureVoiceManagerForDm();
+
+  // join() onUpdate tetikler — bayraklar ve sahne ÖNCE açık olmalı, yoksa ızgara boş kalır
+  dmCallActive = true;
+  dmCallRinging = !!ringing;
+  const name = dmCallPeerName();
+  dmFeatures?.updateCallStage?.(name);
+  dmFeatures?.showCallStage?.(true);
+  dmFeatures?.setCallRinging?.(!!ringing, ringing ? 'Aranıyor…' : 'Arama sürüyor');
+  showVoiceFooter(name);
+  if ($('voice-conn-title')) {
+    $('voice-conn-title').textContent = ringing ? 'Aranıyor…' : 'Ses Bağlantısı Kuruldu';
+  }
+  paintVoiceGrid(emptyVoiceState());
+
   return new Promise((resolve) => {
     socket.emit('join-dm-call', { channelId: activeDmChannelId }, async (res) => {
       if (res?.error) {
@@ -2807,16 +2862,9 @@ async function enterDmCallMedia({ ringing = false } = {}) {
         if (voiceManager.isCameraOn()) {
           try { await voiceManager.toggleCamera(); } catch {}
         }
-        dmCallActive = true;
-        dmCallRinging = !!ringing;
-        const name = dmCallPeerName();
-        dmFeatures?.updateCallStage?.(name);
-        dmFeatures?.showCallStage?.(true);
-        dmFeatures?.setCallRinging?.(!!ringing, ringing ? 'Aranıyor…' : 'Arama sürüyor');
-        showVoiceFooter(name);
-        $('voice-conn-title').textContent = ringing ? 'Aranıyor…' : 'Ses Bağlantısı Kuruldu';
         syncDmCallControls();
         $('dm-call-cam')?.classList.add('off');
+        paintVoiceGrid(lastVoiceState || emptyVoiceState());
         resolve(true);
       } catch (err) {
         toast(err?.message || 'Arama başlatılamadı');
