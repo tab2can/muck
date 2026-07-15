@@ -273,7 +273,7 @@ export function removeFriend(userId, friendId) {
 }
 
 function ensureSocial(user) {
-  if (!user.social) user.social = {};
+  if (!user?.social) user.social = {};
   const s = user.social;
   if (!Array.isArray(s.pinnedDms)) s.pinnedDms = [];
   if (!Array.isArray(s.closedDms)) s.closedDms = [];
@@ -283,6 +283,10 @@ function ensureSocial(user) {
   if (!s.unreadDms || typeof s.unreadDms !== 'object') s.unreadDms = {};
   if (!s.friendSince || typeof s.friendSince !== 'object') s.friendSince = {};
   if (!s.notes || typeof s.notes !== 'object') s.notes = {};
+  if (!Array.isArray(s.pinnedGroups)) s.pinnedGroups = [];
+  if (!Array.isArray(s.closedGroups)) s.closedGroups = [];
+  if (!s.mutedGroups || typeof s.mutedGroups !== 'object') s.mutedGroups = {};
+  if (!s.unreadGroups || typeof s.unreadGroups !== 'object') s.unreadGroups = {};
   return s;
 }
 
@@ -638,52 +642,331 @@ export function getMessages(channelId, limit = 50) {
 }
 
 // ---- DMs ----
+const MAX_GROUP_MEMBERS = 10;
+
+function ensureDmChannelShape(ch) {
+  if (!ch.type) ch.type = ch.users?.length > 2 ? 'group' : 'dm';
+  if (!Array.isArray(ch.pins)) ch.pins = [];
+  if (ch.name == null) ch.name = null;
+  if (!ch.ownerId && ch.users?.[0]) ch.ownerId = ch.users[0];
+  return ch;
+}
+
+function dmMsgKey(channel) {
+  if (channel.type === 'group') return `g:${channel.id}`;
+  return dmKey(channel.users[0], channel.users[1]);
+}
+
 export function pushDM(fromId, toId, text) {
-  const key = dmKey(fromId, toId);
+  const channel = getOrCreateDMChannel(fromId, toId);
+  return pushDmChannelMessage(channel.id, fromId, text);
+}
+
+export function pushDmChannelMessage(channelId, fromId, text) {
+  const channel = getDMChannelById(channelId);
+  if (!channel) return { error: 'Kanal bulunamadı.' };
+  if (!channel.users.includes(fromId)) return { error: 'Yetkiniz yok.' };
+  const key = dmMsgKey(channel);
   if (!data.dms[key]) data.dms[key] = [];
   const msg = { id: crypto.randomUUID(), fromId, text: text.trim(), ts: Date.now() };
   data.dms[key].push(msg);
   if (data.dms[key].length > MAX_MESSAGES) data.dms[key] = data.dms[key].slice(-MAX_MESSAGES);
-  const channel = getOrCreateDMChannel(fromId, toId);
   channel.lastMessageAt = msg.ts;
   channel.lastFromId = fromId;
-  const recipient = findById(toId);
-  if (recipient) {
-    const s = ensureSocial(recipient);
-    s.closedDms = s.closedDms.filter((id) => id !== fromId);
-    s.unreadDms[fromId] = true;
+  for (const uid of channel.users) {
+    if (uid === fromId) continue;
+    const user = findById(uid);
+    if (!user) continue;
+    const s = ensureSocial(user);
+    if (channel.type === 'group') {
+      s.closedGroups = (s.closedGroups || []).filter((id) => id !== channelId);
+      if (!s.unreadGroups) s.unreadGroups = {};
+      s.unreadGroups[channelId] = true;
+    } else {
+      const other = channel.users.find((u) => u !== uid);
+      s.closedDms = s.closedDms.filter((id) => id !== other);
+      s.unreadDms[other] = true;
+    }
   }
   save();
-  return msg;
+  return { message: msg, channel: publicDmChannel(channel, fromId) };
 }
 
 export function getDMs(userId, friendId, limit = 50) {
-  const key = dmKey(userId, friendId);
-  const msgs = data.dms[key] || [];
+  const channel = getOrCreateDMChannel(userId, friendId);
+  return getDmChannelMessages(channel.id, limit);
+}
+
+export function getDmChannelMessages(channelId, limit = 50) {
+  const channel = getDMChannelById(channelId);
+  if (!channel) return [];
+  const msgs = data.dms[dmMsgKey(channel)] || [];
   return msgs.slice(-limit);
+}
+
+export function searchDmChannel(userId, channelId, query, limit = 50) {
+  const channel = getDMChannelById(channelId);
+  if (!channel || !channel.users.includes(userId)) return { error: 'Kanal bulunamadı.' };
+  const q = String(query || '').trim().toLowerCase();
+  if (q.length < 1) return { results: [] };
+  const msgs = data.dms[dmMsgKey(channel)] || [];
+  const results = [];
+  for (let i = msgs.length - 1; i >= 0 && results.length < limit; i--) {
+    const m = msgs[i];
+    if ((m.text || '').toLowerCase().includes(q)) {
+      const author = findById(m.fromId);
+      results.push({
+        ...m,
+        username: author?.username || '—',
+      });
+    }
+  }
+  return { results, channelId, query: q };
+}
+
+export function pinDmMessage(userId, channelId, messageId, pinned = true) {
+  const channel = getDMChannelById(channelId);
+  if (!channel || !channel.users.includes(userId)) return { error: 'Kanal bulunamadı.' };
+  ensureDmChannelShape(channel);
+  const msgs = data.dms[dmMsgKey(channel)] || [];
+  const msg = msgs.find((m) => m.id === messageId);
+  if (!msg && pinned) return { error: 'Mesaj bulunamadı.' };
+  channel.pins = channel.pins.filter((p) => p.messageId !== messageId);
+  if (pinned && msg) {
+    channel.pins.unshift({
+      messageId: msg.id,
+      fromId: msg.fromId,
+      text: msg.text,
+      ts: msg.ts,
+      pinnedBy: userId,
+      pinnedAt: Date.now(),
+    });
+    if (channel.pins.length > 50) channel.pins = channel.pins.slice(0, 50);
+  }
+  save();
+  return { pins: channel.pins.map(enrichPin), channelId };
+}
+
+function enrichPin(p) {
+  const author = findById(p.fromId);
+  return { ...p, username: author?.username || '—' };
+}
+
+export function getDmPins(userId, channelId) {
+  const channel = getDMChannelById(channelId);
+  if (!channel || !channel.users.includes(userId)) return { error: 'Kanal bulunamadı.' };
+  ensureDmChannelShape(channel);
+  return { pins: channel.pins.map(enrichPin) };
 }
 
 // ---- DM Channels (URL için kalıcı sayısal id) ----
 export function getOrCreateDMChannel(a, b) {
   const key = dmKey(a, b);
-  let found = Object.values(data.dmChannels).find((c) => dmKey(c.users[0], c.users[1]) === key);
+  let found = Object.values(data.dmChannels).find((c) => {
+    ensureDmChannelShape(c);
+    return c.type === 'dm' && c.users.length === 2 && dmKey(c.users[0], c.users[1]) === key;
+  });
   if (!found) {
     const id = snowflake();
-    found = { id, users: [a, b], createdAt: Date.now(), lastMessageAt: 0, lastFromId: null };
+    found = {
+      id, type: 'dm', name: null, ownerId: a,
+      users: [a, b], createdAt: Date.now(), lastMessageAt: 0, lastFromId: null, pins: [],
+    };
     data.dmChannels[id] = found;
     save();
   }
-  return found;
+  return ensureDmChannelShape(found);
 }
 
 export function getDMChannelById(id) {
-  return data.dmChannels[id] || null;
+  const ch = data.dmChannels[id] || null;
+  return ch ? ensureDmChannelShape(ch) : null;
+}
+
+export function publicDmChannel(channel, viewerId = null) {
+  ensureDmChannelShape(channel);
+  const members = channel.users.map((id) => {
+    const u = findById(id);
+    return u ? { id: u.id, username: u.username } : { id, username: '—' };
+  });
+  let title = channel.name;
+  if (!title) {
+    if (channel.type === 'group') title = members.map((m) => m.username).join(', ');
+    else {
+      const other = channel.users.find((id) => id !== viewerId) || channel.users[0];
+      title = findById(other)?.username || 'DM';
+    }
+  }
+  return {
+    id: channel.id,
+    type: channel.type,
+    name: channel.name,
+    title,
+    ownerId: channel.ownerId,
+    users: channel.users.slice(),
+    members,
+    memberCount: channel.users.length,
+    lastMessageAt: channel.lastMessageAt || 0,
+    lastFromId: channel.lastFromId || null,
+    createdAt: channel.createdAt,
+  };
+}
+
+export function createGroupDM(creatorId, memberIds = [], name = null) {
+  const creator = findById(creatorId);
+  if (!creator) return { error: 'Oturum geçersiz.' };
+  const ids = [...new Set([creatorId, ...memberIds.map(String)])];
+  if (ids.length < 2) return { error: 'En az bir kişi seçmelisin.' };
+  if (ids.length > MAX_GROUP_MEMBERS) return { error: `En fazla ${MAX_GROUP_MEMBERS} kişi olabilir.` };
+  for (const id of ids) {
+    if (id === creatorId) continue;
+    if (!creator.friends.includes(id)) return { error: 'Sadece arkadaşlarını ekleyebilirsin.' };
+    const other = findById(id);
+    if (!other) return { error: 'Kullanıcı bulunamadı.' };
+    if (isBlockedEither(creatorId, id)) return { error: 'Engelli kullanıcı eklenemez.' };
+  }
+  // Tamamen aynı üyelerle mevcut grup varsa onu aç
+  const sorted = [...ids].sort().join(':');
+  const existing = Object.values(data.dmChannels).find((c) => {
+    ensureDmChannelShape(c);
+    return c.type === 'group' && [...c.users].sort().join(':') === sorted;
+  });
+  if (existing) return { channel: publicDmChannel(existing, creatorId) };
+
+  const id = snowflake();
+  const channel = {
+    id,
+    type: 'group',
+    name: name ? String(name).trim().slice(0, 100) || null : null,
+    ownerId: creatorId,
+    users: ids,
+    createdAt: Date.now(),
+    lastMessageAt: Date.now(),
+    lastFromId: null,
+    pins: [],
+  };
+  data.dmChannels[id] = channel;
+  save();
+  return { channel: publicDmChannel(channel, creatorId) };
+}
+
+export function updateGroupDM(userId, channelId, { name } = {}) {
+  const channel = getDMChannelById(channelId);
+  if (!channel || channel.type !== 'group') return { error: 'Grup bulunamadı.' };
+  if (!channel.users.includes(userId)) return { error: 'Yetkiniz yok.' };
+  if (name !== undefined) channel.name = String(name || '').trim().slice(0, 100) || null;
+  save();
+  return { channel: publicDmChannel(channel, userId) };
+}
+
+export function leaveGroupDM(userId, channelId) {
+  const channel = getDMChannelById(channelId);
+  if (!channel || channel.type !== 'group') return { error: 'Grup bulunamadı.' };
+  if (!channel.users.includes(userId)) return { error: 'Zaten üye değilsin.' };
+  channel.users = channel.users.filter((id) => id !== userId);
+  const u = findById(userId);
+  if (u) {
+    const s = ensureSocial(u);
+    s.pinnedGroups = s.pinnedGroups.filter((id) => id !== channelId);
+    s.closedGroups = s.closedGroups.filter((id) => id !== channelId);
+    delete s.unreadGroups[channelId];
+    delete s.mutedGroups[channelId];
+  }
+  if (channel.users.length < 2) {
+    delete data.dmChannels[channelId];
+    delete data.dms[`g:${channelId}`];
+  } else if (channel.ownerId === userId) {
+    channel.ownerId = channel.users[0];
+  }
+  save();
+  return { success: true, channel: channel.users.length >= 2 ? publicDmChannel(channel, userId) : null };
+}
+
+export function getUserGroupDMs(userId) {
+  const social = getSocial(userId) || {};
+  return Object.values(data.dmChannels)
+    .map(ensureDmChannelShape)
+    .filter((c) => c.type === 'group' && c.users.includes(userId))
+    .map((c) => {
+      const pub = publicDmChannel(c, userId);
+      return {
+        ...pub,
+        pinned: (social.pinnedGroups || []).includes(c.id),
+        closed: (social.closedGroups || []).includes(c.id),
+        unread: !!(social.unreadGroups || {})[c.id],
+        mutedUntil: (social.mutedGroups || {})[c.id] ?? null,
+      };
+    });
+}
+
+export function setGroupPinned(userId, channelId, pinned) {
+  const user = findById(userId);
+  const channel = getDMChannelById(channelId);
+  if (!user || !channel || channel.type !== 'group' || !channel.users.includes(userId)) {
+    return { error: 'Grup bulunamadı.' };
+  }
+  const s = ensureSocial(user);
+  if (!Array.isArray(s.pinnedGroups)) s.pinnedGroups = [];
+  s.pinnedGroups = s.pinnedGroups.filter((id) => id !== channelId);
+  if (pinned) s.pinnedGroups.unshift(channelId);
+  if (!Array.isArray(s.closedGroups)) s.closedGroups = [];
+  s.closedGroups = s.closedGroups.filter((id) => id !== channelId);
+  save();
+  return { social: getSocial(userId) };
+}
+
+export function closeGroupDm(userId, channelId) {
+  const user = findById(userId);
+  if (!user) return { error: 'Oturum geçersiz.' };
+  const s = ensureSocial(user);
+  if (!Array.isArray(s.closedGroups)) s.closedGroups = [];
+  if (!s.closedGroups.includes(channelId)) s.closedGroups.push(channelId);
+  if (s.pinnedGroups) s.pinnedGroups = s.pinnedGroups.filter((id) => id !== channelId);
+  if (s.unreadGroups) delete s.unreadGroups[channelId];
+  save();
+  return { social: getSocial(userId) };
+}
+
+export function markGroupRead(userId, channelId) {
+  const user = findById(userId);
+  if (!user) return { error: 'Oturum geçersiz.' };
+  const s = ensureSocial(user);
+  if (s.unreadGroups) delete s.unreadGroups[channelId];
+  save();
+  return { social: getSocial(userId) };
+}
+
+export function setGroupMuted(userId, channelId, until) {
+  const user = findById(userId);
+  const channel = getDMChannelById(channelId);
+  if (!user || !channel?.users.includes(userId)) return { error: 'Grup bulunamadı.' };
+  const s = ensureSocial(user);
+  if (!s.mutedGroups) s.mutedGroups = {};
+  if (until === null || until === undefined) delete s.mutedGroups[channelId];
+  else s.mutedGroups[channelId] = until;
+  save();
+  return { social: getSocial(userId) };
+}
+
+export function isGroupMuted(userId, channelId) {
+  const user = findById(userId);
+  if (!user) return false;
+  const until = ensureSocial(user).mutedGroups?.[channelId];
+  if (until === undefined) return false;
+  if (until === 0) return true;
+  if (Date.now() > until) {
+    delete ensureSocial(user).mutedGroups[channelId];
+    save();
+    return false;
+  }
+  return true;
 }
 
 export function getDmActivity(userId, friendId) {
-  const channel = Object.values(data.dmChannels).find(
-    (c) => c.users.includes(userId) && c.users.includes(friendId)
-  );
+  const channel = Object.values(data.dmChannels).find((c) => {
+    ensureDmChannelShape(c);
+    return c.type === 'dm' && c.users.includes(userId) && c.users.includes(friendId);
+  });
   if (channel?.lastMessageAt) return { lastMessageAt: channel.lastMessageAt, lastFromId: channel.lastFromId || null, dmChannelId: channel.id };
   const msgs = getDMs(userId, friendId, 1);
   const last = msgs[msgs.length - 1];

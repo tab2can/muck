@@ -150,8 +150,20 @@ function emitSocial(userId) {
   const sockets = onlineUsers.get(userId);
   if (sockets) {
     for (const sid of sockets) {
-      io.to(sid).emit('social-update', { social, friends: friendsSnapshot(userId) });
+      io.to(sid).emit('social-update', {
+        social,
+        friends: friendsSnapshot(userId),
+        groupDms: store.getUserGroupDMs(userId),
+      });
     }
+  }
+}
+
+function emitToChannelUsers(channel, event, payload, exceptUserId = null) {
+  for (const uid of channel.users) {
+    if (exceptUserId && uid === exceptUserId) continue;
+    const sockets = onlineUsers.get(uid);
+    if (sockets) for (const sid of sockets) io.to(sid).emit(event, payload);
   }
 }
 
@@ -247,6 +259,7 @@ function leaveVoice(socket) {
   const channelId = socket.data.voiceChannelId;
   if (!channelId) return;
   const uid = socket.data.userId;
+  const wasDmCall = !!socket.data.dmCall;
   const map = voiceParticipants.get(channelId);
   if (map) {
     map.delete(socket.id);
@@ -255,8 +268,21 @@ function leaveVoice(socket) {
   socket.to(`voice:${channelId}`).emit('voice-peer-left', { userId: uid, socketId: socket.id });
   socket.leave(`voice:${channelId}`);
   socket.data.voiceChannelId = null;
-  broadcastVoicePresence(channelId);
-  notifyFriendsVoiceOfUser(uid);
+  socket.data.dmCall = false;
+  if (wasDmCall) {
+    const channel = store.getDMChannelById(channelId);
+    io.to(`voice:${channelId}`).emit('voice-presence', { channelId, participants: getVoiceList(channelId) });
+    if (channel) {
+      emitToChannelUsers(channel, 'dm-call-update', {
+        channelId,
+        participants: getVoiceList(channelId),
+        fromId: uid,
+      });
+    }
+  } else {
+    broadcastVoicePresence(channelId);
+    notifyFriendsVoiceOfUser(uid);
+  }
 }
 
 io.use((socket, next) => {
@@ -280,6 +306,7 @@ io.on('connection', (socket) => {
     social: store.getSocial(userId),
     servers: store.getUserServers(userId),
     friendsVoice: friendsVoiceSnapshot(userId),
+    groupDms: store.getUserGroupDMs(userId),
   });
   if (wasOffline) notifyFriendsOfChange(userId);
 
@@ -524,6 +551,8 @@ io.on('connection', (socket) => {
       messages: store.getDMs(userId, friendId),
       friend: { id: friend.id, username: friend.username },
       dmChannelId: channel.id,
+      channel: store.publicDmChannel(channel, userId),
+      pins: channel.pins || [],
       social: store.getSocial(userId),
       ...bs,
     });
@@ -533,6 +562,24 @@ io.on('connection', (socket) => {
   socket.on('get-dm-by-channel', ({ dmChannelId }, cb) => {
     const channel = store.getDMChannelById(dmChannelId);
     if (!channel || !channel.users.includes(userId)) return cb?.({ error: 'DM bulunamadı.' });
+
+    if (channel.type === 'group') {
+      store.markGroupRead(userId, channel.id);
+      cb?.({
+        type: 'group',
+        messages: store.getDmChannelMessages(channel.id),
+        channel: store.publicDmChannel(channel, userId),
+        dmChannelId: channel.id,
+        pins: (channel.pins || []).map((p) => {
+          const author = store.findById(p.fromId);
+          return { ...p, username: author?.username || '—' };
+        }),
+        social: store.getSocial(userId),
+      });
+      emitSocial(userId);
+      return;
+    }
+
     const friendId = channel.users.find((u) => u !== userId);
     const friend = store.findById(friendId);
     const user = store.findById(userId);
@@ -541,25 +588,65 @@ io.on('connection', (socket) => {
     store.markDmRead(userId, friendId);
     const bs = store.blockState(userId, friendId);
     cb?.({
+      type: 'dm',
       messages: store.getDMs(userId, friendId),
       friend: { id: friend.id, username: friend.username },
       friendId,
       dmChannelId: channel.id,
+      channel: store.publicDmChannel(channel, userId),
+      pins: channel.pins || [],
       social: store.getSocial(userId),
       ...bs,
     });
     emitSocial(userId);
   });
 
-  socket.on('send-dm', ({ friendId, text }, cb) => {
+  socket.on('send-dm', ({ friendId, text, channelId }, cb) => {
     if (!text?.trim()) return cb?.({ error: 'Boş mesaj.' });
+
+    // Grup DM
+    if (channelId) {
+      const channel = store.getDMChannelById(channelId);
+      if (!channel || !channel.users.includes(userId)) return cb?.({ error: 'Kanal bulunamadı.' });
+      const result = store.pushDmChannelMessage(channelId, userId, text);
+      if (result.error) return cb?.({ error: result.error });
+      const payload = {
+        channelId,
+        type: channel.type,
+        fromId: userId,
+        username: socket.data.username,
+        message: result.message,
+      };
+      for (const uid of channel.users) {
+        if (uid === userId) continue;
+        const sockets = onlineUsers.get(uid);
+        if (!sockets) continue;
+        for (const sid of sockets) {
+          io.to(sid).emit('dm', {
+            ...payload,
+            friendId: channel.type === 'dm' ? userId : null,
+            muted: channel.type === 'group'
+              ? store.isGroupMuted(uid, channelId)
+              : store.isDmMuted(uid, userId),
+          });
+        }
+        emitSocial(uid);
+      }
+      cb?.({ message: result.message, channel: result.channel });
+      emitSocial(userId);
+      return;
+    }
+
     const user = store.findById(userId);
     if (!user?.friends.includes(friendId)) return cb?.({ error: 'Arkadaş değil.' });
     const bs = store.blockState(userId, friendId);
     if (bs.blockedByMe) return cb?.({ error: 'Engellediğin bir kullanıcıya mesaj gönderemezsin.' });
     if (bs.blockedByThem) return cb?.({ error: 'Bu kullanıcıya mesaj gönderemezsin.' });
-    const msg = store.pushDM(userId, friendId, text);
-    const payload = { fromId: userId, username: socket.data.username, message: msg };
+    const result = store.pushDM(userId, friendId, text);
+    if (result.error) return cb?.({ error: result.error });
+    const msg = result.message;
+    const channel = store.getOrCreateDMChannel(userId, friendId);
+    const payload = { fromId: userId, username: socket.data.username, message: msg, channelId: channel.id, type: 'dm' };
     const sockets = onlineUsers.get(friendId);
     if (sockets) {
       for (const sid of sockets) {
@@ -575,6 +662,75 @@ io.on('connection', (socket) => {
     }
     cb?.({ message: msg });
     emitSocial(userId);
+  });
+
+  socket.on('create-group-dm', ({ memberIds, name }, cb) => {
+    const result = store.createGroupDM(userId, memberIds || [], name);
+    if (result.error) return cb?.({ error: result.error });
+    cb?.(result);
+    for (const uid of result.channel.users) emitSocial(uid);
+  });
+
+  socket.on('update-group-dm', ({ channelId, name }, cb) => {
+    const result = store.updateGroupDM(userId, channelId, { name });
+    if (result.error) return cb?.({ error: result.error });
+    cb?.(result);
+    emitToChannelUsers(store.getDMChannelById(channelId), 'group-dm-updated', { channel: result.channel });
+    for (const uid of result.channel.users) emitSocial(uid);
+  });
+
+  socket.on('leave-group-dm', ({ channelId }, cb) => {
+    const channel = store.getDMChannelById(channelId);
+    const result = store.leaveGroupDM(userId, channelId);
+    if (result.error) return cb?.({ error: result.error });
+    cb?.(result);
+    emitSocial(userId);
+    if (channel) {
+      for (const uid of channel.users) {
+        if (uid !== userId) emitSocial(uid);
+      }
+    }
+  });
+
+  socket.on('group-dm-pin', ({ channelId, pinned }, cb) => {
+    const result = store.setGroupPinned(userId, channelId, !!pinned);
+    if (result.error) return cb?.({ error: result.error });
+    cb?.(result);
+    emitSocial(userId);
+  });
+  socket.on('group-dm-close', ({ channelId }, cb) => {
+    const result = store.closeGroupDm(userId, channelId);
+    if (result.error) return cb?.({ error: result.error });
+    cb?.(result);
+    emitSocial(userId);
+  });
+  socket.on('group-dm-read', ({ channelId }, cb) => {
+    const result = store.markGroupRead(userId, channelId);
+    if (result.error) return cb?.({ error: result.error });
+    cb?.(result);
+    emitSocial(userId);
+  });
+  socket.on('group-dm-mute', ({ channelId, until }, cb) => {
+    const result = store.setGroupMuted(userId, channelId, until);
+    if (result.error) return cb?.({ error: result.error });
+    cb?.(result);
+    emitSocial(userId);
+  });
+
+  socket.on('search-dm', ({ channelId, query }, cb) => {
+    cb?.(store.searchDmChannel(userId, channelId, query));
+  });
+
+  socket.on('pin-dm-message', ({ channelId, messageId, pinned }, cb) => {
+    const result = store.pinDmMessage(userId, channelId, messageId, pinned !== false);
+    if (result.error) return cb?.({ error: result.error });
+    cb?.(result);
+    const channel = store.getDMChannelById(channelId);
+    if (channel) emitToChannelUsers(channel, 'dm-pins-updated', { channelId, pins: result.pins });
+  });
+
+  socket.on('get-dm-pins', ({ channelId }, cb) => {
+    cb?.(store.getDmPins(userId, channelId));
   });
 
   socket.on('dm-pin', ({ friendId, pinned }, cb) => {
@@ -646,6 +802,44 @@ io.on('connection', (socket) => {
     }
   });
 
+  // ---- DM araması (aynı mesh, kanal = dmChannelId) ----
+  socket.on('join-dm-call', ({ channelId }, cb) => {
+    const channel = store.getDMChannelById(channelId);
+    if (!channel || !channel.users.includes(userId)) return cb?.({ error: 'DM bulunamadı.' });
+    if (socket.data.voiceChannelId && socket.data.voiceChannelId !== channelId) leaveVoice(socket);
+
+    if (!voiceParticipants.has(channelId)) voiceParticipants.set(channelId, new Map());
+    const map = voiceParticipants.get(channelId);
+    const existing = [...map.entries()].filter(([sid]) => sid !== socket.id);
+
+    map.set(socket.id, {
+      userId, username: socket.data.username,
+      muted: false, deafened: false, camera: false, screen: false, camId: null, screenId: null,
+    });
+    socket.join(`voice:${channelId}`);
+    socket.data.voiceChannelId = channelId;
+    socket.data.dmCall = true;
+
+    cb?.({
+      participants: existing.map(([sid, v]) => ({
+        socketId: sid, userId: v.userId, username: v.username,
+        muted: !!v.muted, deafened: !!v.deafened, camera: !!v.camera, screen: !!v.screen,
+        camId: v.camId || null, screenId: v.screenId || null,
+      })),
+    });
+
+    socket.to(`voice:${channelId}`).emit('voice-peer-joined', {
+      userId, username: socket.data.username, socketId: socket.id,
+    });
+    io.to(`voice:${channelId}`).emit('voice-presence', { channelId, participants: getVoiceList(channelId) });
+    emitToChannelUsers(channel, 'dm-call-update', {
+      channelId,
+      participants: getVoiceList(channelId),
+      fromId: userId,
+      username: socket.data.username,
+    }, null);
+  });
+
   // ---- Voice channels (mesh signaling) ----
   socket.on('join-voice', ({ channelId }, cb) => {
     const found = store.findChannel(channelId);
@@ -655,6 +849,7 @@ io.on('connection', (socket) => {
 
     // Önceki ses kanalından ayrıl
     if (socket.data.voiceChannelId && socket.data.voiceChannelId !== channelId) leaveVoice(socket);
+    socket.data.dmCall = false;
 
     if (!voiceParticipants.has(channelId)) voiceParticipants.set(channelId, new Map());
     const map = voiceParticipants.get(channelId);

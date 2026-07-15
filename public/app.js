@@ -1,4 +1,5 @@
 import { createVoiceManager } from './voice.js';
+import { initDmFeatures } from './dm-features.js';
 
 const $ = (id) => document.getElementById(id);
 const THEME_COLORS = { dark: '#0f1117', black: '#000000', light: '#f3f5f9' };
@@ -9,15 +10,22 @@ let currentUser = null;
 let friends = [];
 let friendRequests = { incoming: [], outgoing: [] };
 let friendsTab = 'online'; // online | all | pending | add
-let social = { pinnedDms: [], closedDms: [], mutedDms: {}, ignored: [], blocked: [], unreadDms: {}, friendSince: {}, notes: {} };
+let social = { pinnedDms: [], closedDms: [], mutedDms: {}, ignored: [], blocked: [], unreadDms: {}, friendSince: {}, notes: {}, pinnedGroups: [], closedGroups: [], mutedGroups: {}, unreadGroups: {} };
 let profileTarget = null;
 let profileMutualTab = 'friends';
 let servers = [];
+let groupDms = [];
 let activeServer = null; // full server object from get-server
 let activeView = 'friends'; // friends | empty | chat | dm | voice | settings
 let activeChannelId = null;
 let activeDmFriendId = null;
 let activeDmChannelId = null;
+let activeGroupId = null;
+let activeGroupTitle = '';
+let dmPins = [];
+let dmProfileOpen = true;
+let dmCallActive = false;
+let dmFeatures = null;
 let voiceManager = null;
 let voicePresence = {}; // channelId -> participants
 let maximizedTile = null; // büyütülen kutunun anahtarı
@@ -150,7 +158,7 @@ function setMainView(view) {
     $(`head-${v}`)?.classList.toggle('hidden', v !== view);
   });
 
-  $('btn-friends-nav')?.classList.toggle('active', view === 'friends' && !activeDmFriendId);
+  $('btn-friends-nav')?.classList.toggle('active', view === 'friends' && !activeDmFriendId && !activeGroupId);
   updatePanel();
 }
 
@@ -172,10 +180,19 @@ function updatePanel() {
     renderMembers();
     members?.classList.remove('hidden');
     app.classList.add('with-panel');
-  } else if (activeView === 'dm' && activeDmFriendId) {
-    renderProfile();
-    profile?.classList.remove('hidden');
+  } else if (activeView === 'dm' && (activeDmFriendId || activeGroupId) && dmProfileOpen) {
+    if (activeGroupId) {
+      renderGroupPanel();
+      members?.classList.remove('hidden');
+      profile?.classList.add('hidden');
+    } else {
+      renderProfile();
+      profile?.classList.remove('hidden');
+      members?.classList.add('hidden');
+    }
     app.classList.add('with-panel');
+  } else if (activeView === 'dm' && !dmProfileOpen) {
+    app.classList.remove('with-panel');
   } else {
     app.classList.remove('with-panel');
   }
@@ -329,39 +346,90 @@ function updateFriendsBadge() {
   }
 }
 
+function renderGroupPanel() {
+  const list = $('member-list');
+  if (!list) return;
+  list.innerHTML = '';
+  const g = groupDms.find((x) => x.id === activeGroupId);
+  const members = g?.members || [];
+  $('member-count').textContent = members.length || g?.memberCount || 0;
+  for (const m of members) {
+    const online = isMemberOnline(m.id);
+    const li = document.createElement('li');
+    li.className = `member-row${online ? '' : ' offline'}`;
+    li.innerHTML = userChipHtml(m.username, online, { size: 'md' });
+    list.appendChild(li);
+  }
+}
+
 function renderFriends() {
-  // Sidebar: Direkt Mesajlar
+  // Sidebar: Direkt Mesajlar = arkadaşlar + gruplar
   const list = $('dm-list');
   if (!list) return;
   list.innerHTML = '';
-  const visible = [...friends].filter((f) => !f.closed);
-  visible.sort((a, b) => {
-    const ap = a.pinned ? 1 : 0;
-    const bp = b.pinned ? 1 : 0;
-    if (ap !== bp) return bp - ap;
-    return (b.lastMessageAt || 0) - (a.lastMessageAt || 0) || a.username.localeCompare(b.username);
-  });
-  for (const f of visible) {
+
+  const friendRows = [...friends].filter((f) => !f.closed);
+  const groupRows = [...groupDms].filter((g) => !g.closed);
+
+  const items = [
+    ...friendRows.map((f) => ({
+      kind: 'dm',
+      id: f.id,
+      sortPinned: f.pinned ? 1 : 0,
+      lastMessageAt: f.lastMessageAt || 0,
+      f,
+    })),
+    ...groupRows.map((g) => ({
+      kind: 'group',
+      id: g.id,
+      sortPinned: g.pinned ? 1 : 0,
+      lastMessageAt: g.lastMessageAt || 0,
+      g,
+    })),
+  ];
+  items.sort((a, b) => b.sortPinned - a.sortPinned || b.lastMessageAt - a.lastMessageAt);
+
+  for (const item of items) {
     const li = document.createElement('li');
     const btn = document.createElement('button');
-    const unread = !!f.unread;
-    btn.className = 'sidebar-item sidebar-item--user'
-      + (activeDmFriendId === f.id ? ' active' : '')
-      + (unread ? ' unread' : '')
-      + (f.pinned ? ' pinned' : '');
     btn.dataset.allowMenu = '1';
-    btn.dataset.friendId = f.id;
-    btn.innerHTML = userChipHtml(f.username, !!f.online, { size: 'sm' });
-    btn.addEventListener('click', () => openDM(f.id));
-    btn.addEventListener('contextmenu', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      openDmContextMenu(e.clientX, e.clientY, f);
-    });
+    if (item.kind === 'dm') {
+      const f = item.f;
+      const unread = !!f.unread;
+      btn.className = 'sidebar-item sidebar-item--user'
+        + (activeDmFriendId === f.id && !activeGroupId ? ' active' : '')
+        + (unread ? ' unread' : '')
+        + (f.pinned ? ' pinned' : '');
+      btn.dataset.friendId = f.id;
+      btn.innerHTML = userChipHtml(f.username, !!f.online, { size: 'sm' });
+      btn.addEventListener('click', () => openDM(f.id));
+      btn.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openDmContextMenu(e.clientX, e.clientY, f);
+      });
+    } else {
+      const g = item.g;
+      btn.className = 'sidebar-item sidebar-item--user sidebar-item--group'
+        + (activeGroupId === g.id ? ' active' : '')
+        + (g.unread ? ' unread' : '')
+        + (g.pinned ? ' pinned' : '');
+      const label = g.name || g.title || 'Grup';
+      btn.innerHTML = userChipHtml(label, false, {
+        size: 'sm',
+        subtitle: `${g.memberCount || g.users?.length || 0} üye`,
+      });
+      btn.addEventListener('click', () => openGroupChannel(g));
+      btn.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openGroupContextMenu(e.clientX, e.clientY, g);
+      });
+    }
     li.appendChild(btn);
     list.appendChild(li);
   }
-  $('dm-empty')?.classList.toggle('hidden', visible.length > 0);
+  $('dm-empty')?.classList.toggle('hidden', items.length > 0);
   updateFriendsBadge();
   if (activeView === 'friends') renderFriendsMain();
 }
@@ -749,6 +817,9 @@ function openFriendsView(tab = friendsTab, push = true) {
   activeChannelId = null;
   activeDmFriendId = null;
   activeDmChannelId = null;
+  activeGroupId = null;
+  activeGroupTitle = '';
+  endDmCall();
   showSidebarHome();
   renderFriends();
   setMainView('friends');
@@ -861,6 +932,7 @@ function selectServer(serverId, channelId = null, push = true) {
     activeServer = res.server;
     activeDmFriendId = null;
     activeDmChannelId = null;
+    activeGroupId = null;
     // Ses kanallarının mevcut katılımcılarını yükle (yenileme sonrası da görünür).
     if (res.voice) for (const v of res.voice) voicePresence[v.channelId] = v.participants;
     showSidebarServer();
@@ -887,9 +959,10 @@ function isAuthorBlocked(authorId) {
   return !!f?.blocked;
 }
 
-function makeMsgEl(author, text, ts) {
+function makeMsgEl(author, text, ts, msgId = null) {
   const div = document.createElement('div');
   div.className = 'msg';
+  if (msgId) div.dataset.msgId = msgId;
   div.innerHTML = `
     <span class="msg-avatar">${escapeHtml(initials(author))}</span>
     <div class="msg-body">
@@ -897,6 +970,16 @@ function makeMsgEl(author, text, ts) {
       <span class="msg-time">${formatTime(ts)}</span>
       <div class="msg-text">${escapeHtml(text)}</div>
     </div>`;
+  if (msgId && activeView === 'dm' && activeDmChannelId) {
+    div.dataset.allowMenu = '1';
+    div.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dmFeatures?.openMessageMenu?.(e.clientX, e.clientY, {
+        id: msgId, text, fromId: null, ts,
+      }, activeDmChannelId);
+    });
+  }
   return div;
 }
 
@@ -923,8 +1006,8 @@ function createBlockedGroup(msgs, resolve) {
   const body = document.createElement('div');
   body.className = 'blocked-msg-body hidden';
   for (const msg of msgs) {
-    const { author, text, ts } = resolve(msg);
-    body.appendChild(makeMsgEl(author, text, ts));
+    const { author, text, ts, id } = resolve(msg);
+    body.appendChild(makeMsgEl(author, text, ts, id));
   }
 
   let expanded = false;
@@ -945,8 +1028,8 @@ function createBlockedGroup(msgs, resolve) {
 
 function pushIntoBlockedGroup(group, msg, resolve) {
   const body = group.querySelector('.blocked-msg-body');
-  const { author, text, ts } = resolve(msg);
-  body.appendChild(makeMsgEl(author, text, ts));
+  const { author, text, ts, id } = resolve(msg);
+  body.appendChild(makeMsgEl(author, text, ts, id));
   const count = body.children.length;
   group.dataset.count = String(count);
   const expanded = group.dataset.expanded === '1';
@@ -964,7 +1047,7 @@ function appendResolvedMessage(container, msg, resolve) {
       container.appendChild(createBlockedGroup([msg], resolve));
     }
   } else {
-    container.appendChild(makeMsgEl(meta.author, meta.text, meta.ts));
+    container.appendChild(makeMsgEl(meta.author, meta.text, meta.ts, meta.id));
   }
   container.scrollTop = container.scrollHeight;
 }
@@ -982,7 +1065,7 @@ function renderMessageList(container, messages, resolve) {
       }
       container.appendChild(createBlockedGroup(group, resolve));
     } else {
-      container.appendChild(makeMsgEl(meta.author, meta.text, meta.ts));
+      container.appendChild(makeMsgEl(meta.author, meta.text, meta.ts, meta.id));
       i += 1;
     }
   }
@@ -995,17 +1078,29 @@ function resolveChannelMsg(msg) {
     author: msg.username || '—',
     text: msg.text,
     ts: msg.ts,
+    id: msg.id,
   };
 }
 
 function resolveDmMsg(msg, friendId) {
   const isMe = msg.fromId === currentUser?.id;
-  const friend = friends.find((f) => f.id === friendId);
+  let author = currentUser?.username || '—';
+  if (!isMe) {
+    if (activeGroupId) {
+      const g = groupDms.find((x) => x.id === activeGroupId);
+      author = g?.members?.find((m) => m.id === msg.fromId)?.username
+        || friends.find((f) => f.id === msg.fromId)?.username
+        || '—';
+    } else {
+      author = friends.find((f) => f.id === friendId)?.username || '—';
+    }
+  }
   return {
     authorId: msg.fromId,
-    author: isMe ? currentUser.username : (friend?.username || '—'),
+    author,
     text: msg.text,
     ts: msg.ts,
+    id: msg.id,
   };
 }
 
@@ -1034,6 +1129,11 @@ function updateDmComposer() {
   const bar = $('dm-blocked-bar');
   const unblockBtn = $('dm-unblock-btn');
   if (!form || !bar) return;
+  if (activeGroupId) {
+    form.classList.remove('hidden');
+    bar.classList.add('hidden');
+    return;
+  }
   const f = friends.find((x) => x.id === activeDmFriendId);
   const blockedByMe = !!(f?.blocked || (activeDmFriendId && (social.blocked || []).includes(activeDmFriendId)));
   const blockedByThem = !!f?.blockedByThem;
@@ -1065,6 +1165,8 @@ function openDM(friendId, push = true) {
   if (!friend) return;
   activeServer = null;
   activeDmFriendId = friendId;
+  activeGroupId = null;
+  activeGroupTitle = '';
   activeChannelId = null;
   friend.unread = false;
   friend.closed = false;
@@ -1072,12 +1174,16 @@ function openDM(friendId, push = true) {
   setRailActive('home');
   $('dm-title').textContent = `@ ${friend.username}`;
   $('dm-messages').innerHTML = '';
+  dmFeatures?.closeSearchPanel?.();
+  dmFeatures?.closePinsPanel?.();
+  dmFeatures?.updateCallStage?.(friend.username);
   setMainView('dm');
   updateDmComposer();
   renderFriends();
   socket.emit('open-dm', { friendId }, (res) => {
     if (res.error) { toast(res.error); return; }
     activeDmChannelId = res.dmChannelId;
+    dmPins = res.pins || [];
     if (res.social) social = res.social;
     if (friend) {
       friend.blocked = !!res.blockedByMe;
@@ -1090,11 +1196,52 @@ function openDM(friendId, push = true) {
   closeDrawers();
 }
 
+function openGroupChannel(channel, push = true) {
+  if (!channel?.id) return;
+  activeServer = null;
+  activeDmFriendId = null;
+  activeGroupId = channel.id;
+  activeGroupTitle = channel.name || channel.title || 'Grup';
+  activeDmChannelId = channel.id;
+  activeChannelId = null;
+  showSidebarHome();
+  setRailActive('home');
+  $('dm-title').textContent = activeGroupTitle;
+  $('dm-messages').innerHTML = '';
+  dmFeatures?.closeSearchPanel?.();
+  dmFeatures?.closePinsPanel?.();
+  dmFeatures?.updateCallStage?.(activeGroupTitle);
+  setMainView('dm');
+  updateDmComposer();
+  renderFriends();
+  socket.emit('get-dm-by-channel', { dmChannelId: channel.id }, (res) => {
+    if (res.error) { toast(res.error); return; }
+    if (res.channel) {
+      const idx = groupDms.findIndex((g) => g.id === res.channel.id);
+      if (idx >= 0) groupDms[idx] = { ...groupDms[idx], ...res.channel };
+      else groupDms.push(res.channel);
+      activeGroupTitle = res.channel.name || res.channel.title || activeGroupTitle;
+      $('dm-title').textContent = activeGroupTitle;
+    }
+    dmPins = res.pins || [];
+    if (res.social) social = res.social;
+    renderDMMessages(res.messages, null);
+    updatePanel();
+    if (push) navTo(`/channels/@me/${channel.id}`);
+  });
+  closeDrawers();
+}
+
 function openDMByChannel(dmChannelId, push = false) {
   socket.emit('get-dm-by-channel', { dmChannelId }, (res) => {
     if (res.error) { toast(res.error); goHome(false); navTo('/channels/@me'); return; }
+    if (res.type === 'group' || res.channel?.type === 'group') {
+      openGroupChannel(res.channel || { id: dmChannelId }, push);
+      return;
+    }
     activeServer = null;
     activeChannelId = null;
+    activeGroupId = null;
     activeDmFriendId = res.friendId;
     activeDmChannelId = res.dmChannelId;
     if (res.social) social = res.social;
@@ -1108,8 +1255,10 @@ function openDMByChannel(dmChannelId, push = false) {
     renderFriends();
     $('dm-title').textContent = `@ ${res.friend.username}`;
     $('dm-messages').innerHTML = '';
+    dmFeatures?.updateCallStage?.(res.friend.username);
     setMainView('dm');
     updateDmComposer();
+    dmPins = res.pins || [];
     renderDMMessages(res.messages, res.friendId);
     if (push) navTo(`/channels/@me/${res.dmChannelId}`);
     closeDrawers();
@@ -1124,7 +1273,15 @@ $('dm-form').addEventListener('submit', (e) => {
   e.preventDefault();
   const input = $('dm-input');
   const text = input.value.trim();
-  if (!text || !activeDmFriendId) return;
+  if (!text || (!activeDmFriendId && !activeGroupId)) return;
+  if (activeGroupId) {
+    input.value = '';
+    socket.emit('send-dm', { channelId: activeGroupId, text }, (res) => {
+      if (res.error) { toast(res.error); return; }
+      appendResolvedMessage($('dm-messages'), res.message, (m) => resolveDmMsg(m, null));
+    });
+    return;
+  }
   const f = friends.find((x) => x.id === activeDmFriendId);
   if (f?.blocked || f?.blockedByThem) {
     toast(f.blocked ? 'Engellediğin bir kullanıcıya mesaj gönderemezsin.' : 'Bu kullanıcıya mesaj gönderemezsin.');
@@ -1395,9 +1552,12 @@ function leaveVoiceChannel() {
 
 function joinVoiceChannel(channelId, name, push = true) {
   if (voiceManager) voiceManager.leave();
+  dmCallActive = false;
+  dmFeatures?.showCallStage?.(false);
   activeChannelId = null;
   activeDmFriendId = null;
   activeDmChannelId = null;
+  activeGroupId = null;
   maximizedTile = null;
   voiceManager = createVoiceManager({
     socket, username: currentUser.username,
@@ -1898,6 +2058,103 @@ function openDmContextMenu(x, y, friend) {
   placeCtxMenu(menu, x, y);
 }
 
+function openGroupContextMenu(x, y, group) {
+  const menu = $('ctx-menu');
+  closeCtxMenu();
+  menu.appendChild(ctxItem({
+    label: 'Okunmuş Olarak İşaretle',
+    disabled: !group.unread,
+    onClick: () => socket.emit('group-dm-read', { channelId: group.id }, () => closeCtxMenu()),
+  }));
+  menu.appendChild(ctxSep());
+  menu.appendChild(ctxItem({
+    label: group.pinned ? 'Sabiti Kaldır' : 'Sabitle',
+    onClick: () => socket.emit('group-dm-pin', { channelId: group.id, pinned: !group.pinned }, () => closeCtxMenu()),
+  }));
+  menu.appendChild(ctxSep());
+  menu.appendChild(ctxItem({
+    label: 'Grubu Düzenle',
+    onClick: () => {
+      closeCtxMenu();
+      showModal('Grubu Düzenle',
+        `<input class="modal-input" id="group-rename-input" placeholder="Grup adı" value="${escapeHtml(group.name || '')}" maxlength="100" />`,
+        [
+          { label: 'İptal', className: 'btn-secondary', onClick: closeModal },
+          {
+            label: 'Kaydet', className: 'btn-primary', onClick: () => {
+              const name = $('group-rename-input')?.value || '';
+              closeModal();
+              socket.emit('update-group-dm', { channelId: group.id, name }, (res) => {
+                if (res?.error) toast(res.error);
+                else if (res.channel && activeGroupId === group.id) {
+                  activeGroupTitle = res.channel.name || res.channel.title;
+                  $('dm-title').textContent = activeGroupTitle;
+                }
+              });
+            },
+          },
+        ]);
+    },
+  }));
+  menu.appendChild(ctxSep());
+  const muteBtn = ctxItem({
+    label: 'Konuşmayı Sustur',
+    right: '›',
+  });
+  muteBtn.addEventListener('mouseenter', () => {
+    openSubmenu(muteBtn, (sub) => {
+      for (const opt of MUTE_OPTIONS) {
+        sub.appendChild(ctxItem({
+          label: opt.label,
+          onClick: () => {
+            const until = opt.ms === 0 ? 0 : Date.now() + opt.ms;
+            socket.emit('group-dm-mute', { channelId: group.id, until }, () => closeCtxMenu());
+          },
+        }));
+      }
+      sub.appendChild(ctxItem({
+        label: 'Susturmayı Kaldır',
+        onClick: () => socket.emit('group-dm-mute', { channelId: group.id, until: null }, () => closeCtxMenu()),
+      }));
+    });
+  });
+  menu.appendChild(muteBtn);
+  menu.appendChild(ctxSep());
+  menu.appendChild(ctxItem({
+    label: 'Gruptan Ayrıl',
+    danger: true,
+    onClick: () => {
+      closeCtxMenu();
+      showModal('Gruptan ayrıl', '<p>Bu gruptan ayrılmak istediğine emin misin?</p>', [
+        { label: 'İptal', className: 'btn-secondary', onClick: closeModal },
+        {
+          label: 'Ayrıl', className: 'btn-danger', onClick: () => {
+            closeModal();
+            socket.emit('leave-group-dm', { channelId: group.id }, () => {
+              groupDms = groupDms.filter((g) => g.id !== group.id);
+              if (activeGroupId === group.id) openFriendsView();
+              else renderFriends();
+            });
+          },
+        },
+      ]);
+    },
+  }));
+  if (settings.developer) {
+    menu.appendChild(ctxSep());
+    menu.appendChild(ctxItem({
+      label: "Kanal ID'sini Kopyala",
+      right: 'ID',
+      onClick: async () => {
+        closeCtxMenu();
+        try { await navigator.clipboard.writeText(String(group.id)); toast('Kanal ID kopyalandı'); }
+        catch { toast('Kopyalanamadı'); }
+      },
+    }));
+  }
+  placeCtxMenu(menu, x, y);
+}
+
 function confirmRemoveFriend(friend) {
   showModal('Arkadaşı çıkar', `<p><strong>${escapeHtml(friend.username)}</strong> arkadaşlık listenden çıkarılacak.</p>`, [
     { label: 'İptal', className: 'btn-secondary', onClick: closeModal },
@@ -2109,12 +2366,13 @@ function connectSocket(token) {
     if (err.message === 'unauthorized') { deleteCookie('muck_token'); showAuth(); }
   });
 
-  socket.on('init', ({ user, friends: fr, friendRequests: frReq, servers: srv, social: soc, friendsVoice: fv }) => {
+  socket.on('init', ({ user, friends: fr, friendRequests: frReq, servers: srv, social: soc, friendsVoice: fv, groupDms: gd }) => {
     currentUser = user;
     friends = fr || [];
     friendRequests = frReq || { incoming: [], outgoing: [] };
     social = soc || social;
     friendsVoice = fv || {};
+    groupDms = gd || [];
     servers = srv;
     $('user-name').textContent = user.username;
     $('user-avatar').textContent = initials(user.username);
@@ -2128,14 +2386,16 @@ function connectSocket(token) {
     applyRoute();
   });
 
-  socket.on('social-update', ({ social: soc, friends: fr }) => {
+  socket.on('social-update', ({ social: soc, friends: fr, groupDms: gd }) => {
     if (soc) social = soc;
     if (fr) friends = fr;
+    if (gd) groupDms = gd;
     renderFriends();
     if (activeView === 'dm' && activeDmFriendId) {
       renderProfile();
       updateDmComposer();
     }
+    if (activeView === 'dm' && activeGroupId) updatePanel();
     if (activeView === 'chat' && activeChannelId) {
       socket.emit('open-text-channel', { channelId: activeChannelId }, (res) => {
         if (res?.error) return;
@@ -2170,13 +2430,34 @@ function connectSocket(token) {
     }
   });
 
-  socket.on('dm', ({ friendId, username, message, muted, ignored, blocked }) => {
-    if (activeDmFriendId === friendId && activeView === 'dm') {
+  socket.on('dm', ({ friendId, username, message, muted, ignored, blocked, channelId, type }) => {
+    const isGroupView = type === 'group' || (channelId && activeGroupId === channelId);
+    const isDmView = !isGroupView && activeDmFriendId === friendId && activeView === 'dm';
+    if (activeView === 'dm' && (isDmView || (isGroupView && activeGroupId === channelId))) {
       appendResolvedMessage($('dm-messages'), message, (m) => resolveDmMsg(m, friendId));
-      if (!blocked) socket.emit('dm-read', { friendId });
+      if (!blocked) {
+        if (isGroupView) socket.emit('group-dm-read', { channelId });
+        else socket.emit('dm-read', { friendId });
+      }
     } else if (!muted && !ignored && !blocked) {
       toast(`${username}: yeni mesaj`);
     }
+  });
+
+  socket.on('dm-pins-updated', ({ channelId, pins }) => {
+    if (channelId === activeDmChannelId) {
+      dmPins = pins || [];
+      if (!$('dm-pins-panel')?.classList.contains('hidden')) dmFeatures?.renderPins?.(dmPins);
+    }
+  });
+
+  socket.on('dm-call-update', ({ channelId, participants }) => {
+    if (channelId !== activeDmChannelId) return;
+    if (participants?.length && !dmCallActive && activeView === 'dm') {
+      // Karşı taraf arıyor — otomatik UI gösterme, sadece toast
+      toast('DM araması var — Arama Başlat ile katıl');
+    }
+    if (dmCallActive) voiceManager?.onPresence?.(participants || []);
   });
 
   socket.on('server-updated', ({ server }) => {
@@ -2293,6 +2574,85 @@ document.addEventListener('touchend', (e) => {
 document.addEventListener('contextmenu', (e) => {
   if (e.target.closest('[data-allow-menu]')) return;
   e.preventDefault();
+});
+
+/* ================= DM call + toolbar ================= */
+async function ensureVoiceManagerForDm() {
+  if (voiceManager) return voiceManager;
+  voiceManager = createVoiceManager({
+    socket,
+    username: currentUser?.username,
+    onUpdate: () => {
+      $('dm-call-mic')?.classList.toggle('off', voiceManager.isMuted());
+      $('dm-call-cam')?.classList.toggle('off', !voiceManager.isCameraOn());
+      $('dm-call-screen')?.classList.toggle('on', voiceManager.isScreenOn());
+    },
+    onSpeaking: () => {},
+  });
+  return voiceManager;
+}
+
+async function startDmCall() {
+  if (!activeDmChannelId) { toast('Önce bir DM aç.'); return; }
+  if (dmCallActive) return;
+  await ensureVoiceManagerForDm();
+  socket.emit('join-dm-call', { channelId: activeDmChannelId }, async (res) => {
+    if (res?.error) { toast(res.error); return; }
+    try {
+      await voiceManager.join(activeDmChannelId, res.participants || []);
+      dmCallActive = true;
+      const name = activeGroupTitle || friends.find((f) => f.id === activeDmFriendId)?.username || 'DM';
+      dmFeatures?.updateCallStage?.(name);
+      dmFeatures?.showCallStage?.(true);
+      showVoiceFooter(name);
+    } catch (err) {
+      toast(err?.message || 'Arama başlatılamadı');
+    }
+  });
+}
+
+function endDmCall() {
+  if (!dmCallActive && !voiceManager) {
+    dmFeatures?.showCallStage?.(false);
+    return;
+  }
+  voiceManager?.leave();
+  voiceManager = null;
+  dmCallActive = false;
+  dmFeatures?.showCallStage?.(false);
+  hideVoiceFooter();
+}
+
+function toggleDmMic() { voiceManager?.toggleMic(); }
+function toggleDmCam() { voiceManager?.toggleCamera(); }
+function toggleDmScreen() { voiceManager?.toggleScreen(); }
+
+dmFeatures = initDmFeatures({
+  $, toast, escapeHtml, initials, formatTime, userChipHtml,
+  getSocket: () => socket,
+  getState: () => ({
+    friends, settings, activeDmFriendId, activeDmChannelId, activeGroupId, activeGroupTitle,
+    dmProfileOpen, dmPins,
+    activeDmFriendName: friends.find((f) => f.id === activeDmFriendId)?.username,
+  }),
+  setState: (patch) => {
+    if ('dmProfileOpen' in patch) dmProfileOpen = patch.dmProfileOpen;
+    if ('dmPins' in patch) dmPins = patch.dmPins;
+  },
+  openGroupChannel,
+  openDM,
+  startDmCall,
+  endDmCall,
+  toggleDmMic,
+  toggleDmCam,
+  toggleDmScreen,
+  updatePanel,
+  closeCtxMenu,
+  placeCtxMenu,
+  ctxItem,
+  ctxSep,
+  showModal,
+  closeModal,
 });
 
 /* ================= PWA ================= */
