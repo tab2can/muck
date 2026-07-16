@@ -47,6 +47,18 @@ function applyRoute() {
   if (!currentUser) return;
   const pathname = location.pathname;
   if (pathname === '/settings') { goHome(false); openSettings(); return; }
+  // PWA share_target / file_handlers giriş noktaları
+  if (pathname === '/share' || pathname === '/open-file') {
+    const q = new URLSearchParams(location.search);
+    const shared = q.get('text') || q.get('url') || q.get('title');
+    history.replaceState({}, '', '/channels/@me');
+    goHome(false);
+    if (shared) {
+      try { sessionStorage.setItem('muck_share_draft', shared); } catch {}
+      setTimeout(() => toast('Paylaşılan içerik alındı — bir sohbete yapıştırabilirsin'), 400);
+    }
+    return;
+  }
   const parts = pathname.split('/').filter(Boolean); // ['channels','@me', id?]
   if (parts[0] !== 'channels') { history.replaceState({}, '', '/channels/@me'); goHome(false); return; }
   const a = parts[1];
@@ -2965,8 +2977,9 @@ dmFeatures = initDmFeatures({
 });
 
 /* ================= PWA ================= */
+// Service worker kaydı index.html'de (erken keşif). Burada yalnızca güncelleme kontrolü.
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
+  navigator.serviceWorker.ready.catch(() => {});
 }
 
 /* ================= Boot ================= */

@@ -43,6 +43,14 @@
   <link rel="stylesheet" href="/style.css" />
   <link rel="stylesheet" href="/dm-features.css" />
   <script>
+    // PWABuilder / tarayıcı keşfi için service worker'ı HTML'de erken kaydet
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function () {
+        navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(function () {});
+      });
+    }
+  </script>
+  <script>
     (function () {
       try {
         document.documentElement.dataset.theme = localStorage.getItem('muck_theme') || localStorage.getItem('streamuck_theme') || 'dark';

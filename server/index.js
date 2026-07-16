@@ -113,8 +113,16 @@ app.use(express.static(PUBLIC_DIR, {
     if (filePath.endsWith('.webmanifest')) {
       res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
     }
+    if (filePath.endsWith('web-app-origin-association') || filePath.includes(`${path.sep}.well-known${path.sep}`)) {
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    }
   },
 }));
+// Eski / alternatif SW yolu (bazı araçlar bunu arar)
+app.get('/service-worker.js', (_req, res) => {
+  res.type('application/javascript');
+  res.sendFile(path.join(PUBLIC_DIR, 'sw.js'));
+});
 app.get(/^(?!\/api\/|\/socket\.io\/).*/, (req, res, next) => {
   if (req.method !== 'GET') return next();
   res.sendFile(path.join(PUBLIC_DIR, 'index.html'));

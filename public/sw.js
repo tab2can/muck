@@ -1,7 +1,8 @@
-const CACHE = 'muck-v19';
+const CACHE = 'muck-v20';
 const PRECACHE = [
   '/',
   '/index.html',
+  '/offline.html',
   '/manifest.webmanifest',
   '/icon.png',
   '/icons/icon-192.png',
@@ -14,10 +15,15 @@ const PRECACHE = [
   '/dm-features.js',
 ];
 
-self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE).then((c) => c.addAll(PRECACHE)).then(() => self.skipWaiting())
+async function precache() {
+  const cache = await caches.open(CACHE);
+  await Promise.all(
+    PRECACHE.map((url) => cache.add(url).catch(() => null))
   );
+}
+
+self.addEventListener('install', (event) => {
+  event.waitUntil(precache().then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (event) => {
@@ -30,10 +36,13 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const { request } = event;
-  const url = new URL(request.url);
-  if (request.method !== 'GET' || url.pathname.startsWith('/socket.io/') || url.pathname.startsWith('/api/')) return;
+  if (request.method !== 'GET') return;
 
-  // SPA navigasyonları (deep-link) her zaman index.html döndürür.
+  const url = new URL(request.url);
+  if (url.origin !== self.location.origin) return;
+  if (url.pathname.startsWith('/socket.io/') || url.pathname.startsWith('/api/')) return;
+
+  // SPA navigasyonları — çevrimdışıysa offline.html
   if (request.mode === 'navigate') {
     event.respondWith(
       fetch(request)
@@ -44,13 +53,18 @@ self.addEventListener('fetch', (event) => {
           }
           return res;
         })
-        .catch(() => caches.match('/index.html').then((c) => c || caches.match('/')))
+        .catch(async () => {
+          const cached = await caches.match('/index.html') || await caches.match('/');
+          return cached || caches.match('/offline.html');
+        })
     );
     return;
   }
 
-  // HTML/JS/CSS: network-first (güncellemeler hemen yansır)
-  const isAppFile = /\.(html|js|css)$/.test(url.pathname) || url.pathname === '/' || url.pathname === '/manifest.webmanifest';
+  const isAppFile = /\.(html|js|css|webmanifest)$/.test(url.pathname)
+    || url.pathname === '/'
+    || url.pathname === '/manifest.webmanifest';
+
   if (isAppFile) {
     event.respondWith(
       fetch(request).then((res) => {
@@ -59,16 +73,18 @@ self.addEventListener('fetch', (event) => {
           caches.open(CACHE).then((c) => c.put(request, copy));
         }
         return res;
-      }).catch(() => caches.match(request))
+      }).catch(() => caches.match(request).then((c) => c || caches.match('/offline.html')))
     );
     return;
   }
 
-  // Diğer statik: cache-first
   event.respondWith(
     caches.match(request).then((cached) => cached || fetch(request).then((res) => {
-      if (res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(request, copy)); }
+      if (res.ok) {
+        const copy = res.clone();
+        caches.open(CACHE).then((c) => c.put(request, copy));
+      }
       return res;
-    }))
+    }).catch(() => cached))
   );
 });

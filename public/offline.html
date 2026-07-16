@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0f1117" />
+  <title>Muck — Çevrimdışı</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100dvh; display: grid; place-items: center;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: #0f1117; color: #e8eaef; text-align: center; padding: 1.5rem;
+    }
+    img { width: 96px; height: 96px; border-radius: 20px; margin-bottom: 1rem; }
+    h1 { margin: 0 0 .5rem; font-size: 1.5rem; }
+    p { margin: 0 0 1.25rem; color: #a0a8be; max-width: 28rem; line-height: 1.45; }
+    button {
+      border: 0; border-radius: 10px; padding: .7rem 1.2rem;
+      background: #3b82f6; color: #fff; font-weight: 700; cursor: pointer;
+    }
+    button:hover { filter: brightness(1.08); }
+  </style>
+</head>
+<body>
+  <main>
+    <img src="/icons/icon-192.png" alt="Muck" width="96" height="96" />
+    <h1>Çevrimdışısın</h1>
+    <p>İnternet bağlantın yok. Bağlantı gelince Muck’a tekrar bağlanabilirsin.</p>
+    <button type="button" onclick="location.reload()">Yeniden dene</button>
+  </main>
+</body>
+</html>
