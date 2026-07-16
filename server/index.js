@@ -123,6 +123,9 @@ app.get('/service-worker.js', (_req, res) => {
   res.type('application/javascript');
   res.sendFile(path.join(PUBLIC_DIR, 'sw.js'));
 });
+app.get(['/privacy', '/privacy.html', '/gizlilik'], (_req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, 'privacy.html'));
+});
 app.get(/^(?!\/api\/|\/socket\.io\/).*/, (req, res, next) => {
   if (req.method !== 'GET') return next();
   res.sendFile(path.join(PUBLIC_DIR, 'index.html'));

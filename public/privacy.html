@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Gizlilik Politikası — Muck</title>
+  <meta name="description" content="Muck gizlilik politikası: hangi verileri topladığımız, nasıl kullandığımız ve haklarınız." />
+  <meta name="theme-color" content="#0f1117" />
+  <link rel="canonical" href="https://muck.tr/privacy" />
+  <link rel="icon" href="/icons/icon-192.png" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0f1117;
+      --surface: #161a22;
+      --border: #2a3140;
+      --text: #e8eaef;
+      --muted: #9aa3b5;
+      --accent: #3b82f6;
+      --link: #7eb6ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+    header {
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      position: sticky; top: 0; z-index: 2;
+    }
+    .bar {
+      max-width: 720px; margin: 0 auto;
+      padding: .9rem 1.25rem;
+      display: flex; align-items: center; gap: .75rem;
+    }
+    .bar img { width: 36px; height: 36px; border-radius: 9px; }
+    .bar a.brand {
+      color: var(--text); text-decoration: none; font-weight: 800; font-size: 1.1rem;
+    }
+    .bar .back {
+      margin-left: auto; color: var(--link); text-decoration: none; font-size: .92rem;
+    }
+    main {
+      max-width: 720px; margin: 0 auto;
+      padding: 2rem 1.25rem 4rem;
+    }
+    h1 { margin: 0 0 .35rem; font-size: 1.85rem; line-height: 1.25; }
+    .meta { color: var(--muted); font-size: .9rem; margin-bottom: 1.75rem; }
+    h2 {
+      margin: 2rem 0 .7rem; font-size: 1.15rem;
+      padding-top: .4rem; border-top: 1px solid var(--border);
+    }
+    h2:first-of-type { border-top: none; padding-top: 0; }
+    p, li { color: #d5dae6; }
+    ul { padding-left: 1.2rem; }
+    li { margin: .35rem 0; }
+    a { color: var(--link); }
+    .box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1rem 1.1rem;
+      margin: 1rem 0 1.5rem;
+    }
+    footer {
+      max-width: 720px; margin: 0 auto;
+      padding: 0 1.25rem 2.5rem;
+      color: var(--muted); font-size: .85rem;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="bar">
+      <img src="/icons/icon-192.png" alt="" width="36" height="36" />
+      <a class="brand" href="https://muck.tr/">Muck</a>
+      <a class="back" href="https://muck.tr/">Uygulamaya dön</a>
+    </div>
+  </header>
+
+  <main>
+    <h1>Gizlilik Politikası</h1>
+    <p class="meta">Son güncelleme: 16 Temmuz 2026 · Geçerli URL: <a href="https://muck.tr/privacy">https://muck.tr/privacy</a></p>
+
+    <div class="box">
+      Bu politika, <strong>Muck</strong> (<a href="https://muck.tr/">https://muck.tr</a>) web uygulaması ve Microsoft Store / PWA sürümü için geçerlidir. Hizmeti kullanarak bu politikayı kabul etmiş sayılırsınız.
+    </div>
+
+    <h2>1. Kim olduğumuz</h2>
+    <p>
+      Muck; sunucular, metin kanalları, doğrudan mesajlar (DM) ve sesli/görüntülü sohbet sunan bir iletişim uygulamasıdır.
+      Veri sorumlusu, Muck hizmetini işleten taraftır. Gizlilik ile ilgili talepleriniz için:
+      <a href="mailto:privacy@muck.tr">privacy@muck.tr</a>
+    </p>
+
+    <h2>2. Topladığımız veriler</h2>
+    <p>Hizmeti kullanırken şu verileri işleyebiliriz:</p>
+    <ul>
+      <li><strong>Hesap bilgileri:</strong> kullanıcı adı ve şifre (şifre sunucuda tuzlanarak hash’lenir; düz metin olarak saklanmaz).</li>
+      <li><strong>İletişim içeriği:</strong> sunucu / kanal mesajları, DM ve grup DM mesajları, tepkiler, sabitlenmiş mesajlar, yanıtlar.</li>
+      <li><strong>Sosyal grafik:</strong> arkadaş listesi, arkadaşlık istekleri, engelleme / yok sayma / sessize alma tercihleri, sunucu üyelikleri ve davetler.</li>
+      <li><strong>Oturum verileri:</strong> giriş sonrası oturum çerezi (<code>muck_token</code>) ve çevrimiçi / ses kanalı varlık durumu.</li>
+      <li><strong>Cihaz tercihleri:</strong> tarayıcıda saklanan tema, vurgu rengi, animasyon ve geliştirici modu ayarları (<code>localStorage</code>).</li>
+      <li><strong>Teknik veriler:</strong> hizmeti çalıştırmak için gerekli bağlantı bilgileri (ör. IP adresi sunucu / ters vekil günlüklerinde kısa süreli görünebilir), hata ve performans sinyalleri.</li>
+    </ul>
+
+    <h2>3. Ses, kamera ve ekran paylaşımı</h2>
+    <p>
+      Sesli sohbet, kamera ve ekran paylaşımı mümkün olduğunca <strong>eşler arası (WebRTC)</strong> aktarılır.
+      Medya içeriğiniz Muck sunucusunda kalıcı olarak kaydedilmez.
+      Bazı ağ koşullarında bağlantıyı kurmak için TURN (röle) sunucusu kullanılabilir; bu durumda ses/görüntü kısa süreli olarak şifreli şekilde röleden geçebilir, arşivlenmez.
+    </p>
+
+    <h2>4. Verileri nasıl kullanırız</h2>
+    <ul>
+      <li>Hesabınızı oluşturmak, oturum açmak ve hizmeti sunmak</li>
+      <li>Mesajları, arkadaşlıkları ve sunucu içeriklerini iletmek</li>
+      <li>Sesli arama ve çağrı durumunu yönetmek</li>
+      <li>Güvenliği sağlamak, kötüye kullanımı azaltmak ve teknik sorunları gidermek</li>
+      <li>Yasal yükümlülüklere uymak</li>
+    </ul>
+    <p>Verilerinizi reklam amacıyla üçüncü taraflara satmayız.</p>
+
+    <h2>5. Çerezler ve benzeri teknolojiler</h2>
+    <ul>
+      <li><strong>Oturum çerezi:</strong> giriş durumunuzu korumak için kullanılır.</li>
+      <li><strong>Yerel depolama:</strong> görünüm tercihleriniz cihazınızda tutulur.</li>
+      <li><strong>Service Worker önbelleği:</strong> uygulamanın daha hızlı açılması ve sınırlı çevrimdışı destek için statik dosyalar önbelleğe alınabilir.</li>
+    </ul>
+
+    <h2>6. Verilerin paylaşımı</h2>
+    <p>Verilerinizi yalnızca şu durumlarda paylaşabiliriz:</p>
+    <ul>
+      <li>Sizin seçtiğiniz diğer Muck kullanıcılarıyla (mesajlar, profil adı, çevrimiçi / ses durumu)</li>
+      <li>Hizmet altyapısı için zorunlu teknik sağlayıcılarla (ör. barındırma, TLS, TURN) — yalnızca hizmetin çalışması için gerekli ölçüde</li>
+      <li>Yasal bir zorunluluk veya yetkili mercinin geçerli talebi olduğunda</li>
+    </ul>
+
+    <h2>7. Saklama süresi</h2>
+    <p>
+      Hesap ve mesaj verileri, hesabınız silinene veya ilgili içerik kaldırılana kadar saklanır.
+      Oturum jetonları çıkış yaptığınızda veya geçersiz kılındığında silinir.
+      Sunucu günlükleri teknik ihtiyaçlar doğrultusunda makul sürelerle tutulabilir.
+    </p>
+
+    <h2>8. Güvenlik</h2>
+    <p>
+      Şifreler hash’lenerek saklanır; bağlantılar HTTPS üzerinden sunulur.
+      Yine de hiçbir sistem %100 güvenli değildir. Güçlü bir şifre kullanın ve hesap bilgilerinizi paylaşmayın.
+    </p>
+
+    <h2>9. Çocukların gizliliği</h2>
+    <p>
+      Muck, 13 yaşın altındaki çocuklara yönelik değildir.
+      13 yaşından küçük bir kullanıcının veri sağladığını fark edersek hesabı ve ilişkili verileri silmek için makul adımları atarız.
+    </p>
+
+    <h2>10. Haklarınız</h2>
+    <p>Yürürlükteki yasalara bağlı olarak şu haklara sahip olabilirsiniz:</p>
+    <ul>
+      <li>Hesabınız ve mesajlarınız hakkında bilgi talep etme</li>
+      <li>Yanlış bilgilerin düzeltilmesini isteme</li>
+      <li>Hesabınızın ve ilişkili verilerin silinmesini talep etme</li>
+      <li>İşlemeye itiraz etme veya kısıtlama isteme</li>
+    </ul>
+    <p>Talepleriniz için <a href="mailto:privacy@muck.tr">privacy@muck.tr</a> adresine yazın.</p>
+
+    <h2>11. Uluslararası aktarım</h2>
+    <p>
+      Hizmet sunucuları bulunduğunuz ülke dışında olabilir.
+      Verileriniz, hizmetin sağlanması için gerekli olduğu ölçüde bu konumlarda işlenebilir.
+    </p>
+
+    <h2>12. Üçüncü taraf bağlantılar ve mağaza</h2>
+    <p>
+      Microsoft Store veya tarayıcı üzerinden yüklenen PWA sürümü aynı Muck hizmetine bağlanır.
+      Mağaza hesabınız, ödemeler ve cihaz izinleri ilgili mağaza / işletim sistemi gizlilik politikalarına da tabidir.
+    </p>
+
+    <h2>13. Politika değişiklikleri</h2>
+    <p>
+      Bu politikayı zaman zaman güncelleyebiliriz. Güncel sürüm her zaman
+      <a href="https://muck.tr/privacy">https://muck.tr/privacy</a> adresinde yayımlanır.
+      Önemli değişikliklerde uygulamada veya sitede makul bir bildirim yapmaya çalışırız.
+    </p>
+
+    <h2>14. İletişim</h2>
+    <p>
+      Gizlilik soruları için:<br />
+      E-posta: <a href="mailto:privacy@muck.tr">privacy@muck.tr</a><br />
+      Web: <a href="https://muck.tr/">https://muck.tr</a>
+    </p>
+  </main>
+
+  <footer>
+    © 2026 Muck · <a href="https://muck.tr/privacy">Gizlilik Politikası</a>
+  </footer>
+</body>
+</html>
