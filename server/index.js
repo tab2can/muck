@@ -108,7 +108,13 @@ app.get('/api/ice', (req, res) => {
 });
 
 const PUBLIC_DIR = path.join(__dirname, '../public');
-app.use(express.static(PUBLIC_DIR));
+app.use(express.static(PUBLIC_DIR, {
+  setHeaders(res, filePath) {
+    if (filePath.endsWith('.webmanifest')) {
+      res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
+    }
+  },
+}));
 app.get(/^(?!\/api\/|\/socket\.io\/).*/, (req, res, next) => {
   if (req.method !== 'GET') return next();
   res.sendFile(path.join(PUBLIC_DIR, 'index.html'));

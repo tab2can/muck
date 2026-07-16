@@ -1,5 +1,18 @@
-const CACHE = 'muck-v18';
-const PRECACHE = ['/icon.png', '/manifest.webmanifest'];
+const CACHE = 'muck-v19';
+const PRECACHE = [
+  '/',
+  '/index.html',
+  '/manifest.webmanifest',
+  '/icon.png',
+  '/icons/icon-192.png',
+  '/icons/icon-512.png',
+  '/icons/maskable-512.png',
+  '/style.css',
+  '/dm-features.css',
+  '/app.js',
+  '/voice.js',
+  '/dm-features.js',
+];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -23,13 +36,21 @@ self.addEventListener('fetch', (event) => {
   // SPA navigasyonları (deep-link) her zaman index.html döndürür.
   if (request.mode === 'navigate') {
     event.respondWith(
-      fetch(request).catch(() => caches.match('/index.html').then((c) => c || caches.match('/')))
+      fetch(request)
+        .then((res) => {
+          if (res.ok) {
+            const copy = res.clone();
+            caches.open(CACHE).then((c) => c.put('/index.html', copy));
+          }
+          return res;
+        })
+        .catch(() => caches.match('/index.html').then((c) => c || caches.match('/')))
     );
     return;
   }
 
   // HTML/JS/CSS: network-first (güncellemeler hemen yansır)
-  const isAppFile = /\.(html|js|css)$/.test(url.pathname) || url.pathname === '/';
+  const isAppFile = /\.(html|js|css)$/.test(url.pathname) || url.pathname === '/' || url.pathname === '/manifest.webmanifest';
   if (isAppFile) {
     event.respondWith(
       fetch(request).then((res) => {
