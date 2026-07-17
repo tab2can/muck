@@ -423,6 +423,19 @@ html[data-theme="light"] .voice-conn { background: #e8ebf2; }
   padding: .75rem 1rem; flex: 0 0 auto;
 }
 .chat-messages { flex: 1; overflow-y: auto; padding: 1rem 1.25rem; display: flex; flex-direction: column; gap: .5rem; scrollbar-width: thin; }
+.msg-history-loader {
+  display: flex; align-items: center; justify-content: center; gap: .55rem;
+  padding: .65rem .5rem; color: var(--muted); font-size: .82rem;
+}
+.msg-history-loader.hidden { display: none; }
+.msg-history-spinner {
+  width: 16px; height: 16px; border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--muted) 35%, transparent);
+  border-top-color: var(--accent);
+  animation: msgSpin .7s linear infinite;
+  flex: 0 0 auto;
+}
+@keyframes msgSpin { to { transform: rotate(360deg); } }
 .msg { display: flex; gap: .65rem; animation: msgIn .2s var(--ease) both; }
 @keyframes msgIn { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:translateY(0)} }
 .msg-avatar { width: 36px; height: 36px; border-radius: 50%; background: var(--accent); color: #fff; display: grid; place-items: center; font-weight: 700; font-size: .75rem; flex: 0 0 auto; align-self: flex-start; }

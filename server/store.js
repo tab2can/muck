@@ -7,6 +7,7 @@ import { supabase } from './supabase.js';
 
 const MAX_MESSAGES = 200;
 const MAX_GROUP_MEMBERS = 10;
+const PAGE_SIZE = 20;
 const EPOCH = 1420070400000;
 let lastTs = 0;
 let seq = 0;
@@ -657,25 +658,32 @@ export async function pushMessage(channelId, userId, username, text) {
   };
 }
 
-export async function getMessages(channelId, limit = 50) {
-  const { data } = await supabase
+export async function getMessages(channelId, { limit = PAGE_SIZE, beforeTs = null } = {}) {
+  let q = supabase
     .from('messages')
     .select('*')
     .eq('channel_id', channelId)
     .order('created_at', { ascending: false })
-    .limit(limit);
-  const rows = (data || []).reverse();
-  const authorIds = [...new Set(rows.map((m) => m.author_id))];
+    .limit(limit + 1);
+  if (beforeTs) q = q.lt('created_at', new Date(beforeTs).toISOString());
+  const { data } = await q;
+  const rows = data || [];
+  const hasMore = rows.length > limit;
+  const page = (hasMore ? rows.slice(0, limit) : rows).reverse();
+  const authorIds = [...new Set(page.map((m) => m.author_id))];
   const authors = await Promise.all(authorIds.map((id) => findById(id)));
   const byId = new Map(authors.filter(Boolean).map((u) => [u.id, u]));
-  return rows.map((m) => ({
-    id: m.id,
-    userId: m.author_id,
-    username: byId.get(m.author_id)?.username || '—',
-    text: m.content,
-    ts: new Date(m.created_at).getTime(),
-    mediaUrls: m.media_urls || [],
-  }));
+  return {
+    messages: page.map((m) => ({
+      id: m.id,
+      userId: m.author_id,
+      username: byId.get(m.author_id)?.username || '—',
+      text: m.content,
+      ts: new Date(m.created_at).getTime(),
+      mediaUrls: m.media_urls || [],
+    })),
+    hasMore,
+  };
 }
 
 // ---- DMs ----
@@ -832,27 +840,35 @@ export async function setDmReply(channelId, fromId, text, replyTo, preloadedChan
   };
 }
 
-export async function getDmChannelMessages(channelId, limit = 50) {
-  const { data } = await supabase
+export async function getDmChannelMessages(channelId, { limit = PAGE_SIZE, beforeTs = null } = {}) {
+  let q = supabase
     .from('dm_messages')
     .select('*')
     .eq('channel_id', channelId)
     .order('created_at', { ascending: false })
-    .limit(limit);
-  return (data || []).reverse().map((m) => ({
-    id: m.id,
-    fromId: m.author_id,
-    text: m.content,
-    ts: new Date(m.created_at).getTime(),
-    reactions: m.reactions || {},
-    replyTo: m.reply_to || null,
-    mediaUrls: m.media_urls || [],
-  }));
+    .limit(limit + 1);
+  if (beforeTs) q = q.lt('created_at', new Date(beforeTs).toISOString());
+  const { data } = await q;
+  const rows = data || [];
+  const hasMore = rows.length > limit;
+  const page = (hasMore ? rows.slice(0, limit) : rows).reverse();
+  return {
+    messages: page.map((m) => ({
+      id: m.id,
+      fromId: m.author_id,
+      text: m.content,
+      ts: new Date(m.created_at).getTime(),
+      reactions: m.reactions || {},
+      replyTo: m.reply_to || null,
+      mediaUrls: m.media_urls || [],
+    })),
+    hasMore,
+  };
 }
 
-export async function getDMs(userId, friendId, limit = 50) {
+export async function getDMs(userId, friendId, opts = {}) {
   const channel = await getOrCreateDMChannel(userId, friendId);
-  return getDmChannelMessages(channel.id, limit);
+  return getDmChannelMessages(channel.id, opts);
 }
 
 export async function searchDmChannel(userId, channelId, query, limit = 50) {
@@ -860,7 +876,7 @@ export async function searchDmChannel(userId, channelId, query, limit = 50) {
   if (!channel || !channel.users.includes(userId)) return { error: 'Yetkiniz yok.' };
   const q = String(query || '').trim().toLowerCase();
   if (!q) return { messages: [] };
-  const msgs = await getDmChannelMessages(channelId, 200);
+  const { messages: msgs } = await getDmChannelMessages(channelId, { limit: 200 });
   const filtered = msgs.filter((m) => m.text.toLowerCase().includes(q)).slice(-limit);
   return { messages: filtered };
 }

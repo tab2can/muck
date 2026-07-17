@@ -35,6 +35,46 @@ let voicePresence = {}; // channelId -> participants
 let maximizedTile = null; // büyütülen kutunun anahtarı
 const onlineMembers = new Set(); // bilinen çevrimiçi üye id'leri (opsiyonel)
 
+const MSG_PAGE = 20;
+let chatHasMore = false;
+let dmHasMore = false;
+let loadingOlderMsgs = false;
+let chatHistoryExpanded = false;
+let dmHistoryExpanded = false;
+
+/* ================= Message cache (localStorage, son 20) ================= */
+function msgCacheKey(kind, id) {
+  return `muck_msgs_v1_${currentUser?.id || 'anon'}_${kind}_${id}`;
+}
+function readMsgCache(kind, id) {
+  if (!id) return null;
+  try {
+    const raw = localStorage.getItem(msgCacheKey(kind, id));
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (!Array.isArray(data.messages)) return null;
+    return data;
+  } catch { return null; }
+}
+function writeMsgCache(kind, id, messages, hasMore) {
+  if (!id || !currentUser?.id) return;
+  const slice = (messages || []).filter((m) => m && m.id && !String(m.id).startsWith('local_')).slice(-MSG_PAGE);
+  try {
+    localStorage.setItem(msgCacheKey(kind, id), JSON.stringify({
+      messages: slice,
+      hasMore: hasMore !== false,
+      savedAt: Date.now(),
+    }));
+  } catch {}
+}
+function appendMsgCache(kind, id, msg) {
+  if (!msg?.id || String(msg.id).startsWith('local_')) return;
+  const cur = readMsgCache(kind, id) || { messages: [], hasMore: true };
+  if (cur.messages.some((m) => m.id === msg.id)) return;
+  cur.messages.push(msg);
+  writeMsgCache(kind, id, cur.messages, cur.hasMore);
+}
+
 /* ================= Router ================= */
 // URL'yi geçmişe ekle (aynıysa tekrar etme).
 function navTo(path) {
@@ -992,6 +1032,7 @@ function makeMsgEl(author, text, ts, msgId = null, extra = {}) {
   const div = document.createElement('div');
   div.className = 'msg';
   if (msgId) div.dataset.msgId = msgId;
+  if (ts) div.dataset.ts = String(ts);
   if (extra.pending) div.dataset.pending = '1';
   if (extra.localId) div.dataset.localId = extra.localId;
   const reply = extra.replyTo;
@@ -1185,7 +1226,11 @@ function failOptimistic(container, localId) {
 }
 
 function renderMessageList(container, messages, resolve) {
-  container.innerHTML = '';
+  const loaderHtml = `<div class="msg-history-loader hidden" aria-hidden="true">
+    <div class="msg-history-spinner"></div>
+    <span>Eski mesajlar yükleniyor…</span>
+  </div>`;
+  container.innerHTML = loaderHtml;
   let i = 0;
   while (i < messages.length) {
     const msg = messages[i];
@@ -1202,6 +1247,120 @@ function renderMessageList(container, messages, resolve) {
     }
   }
   container.scrollTop = container.scrollHeight;
+  bindHistoryScroll(container);
+}
+
+function ensureHistoryLoader(container) {
+  let el = container.querySelector('.msg-history-loader');
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'msg-history-loader hidden';
+    el.innerHTML = `<div class="msg-history-spinner"></div><span>Eski mesajlar yükleniyor…</span>`;
+    container.prepend(el);
+  }
+  return el;
+}
+
+function getOldestMessageTs(container) {
+  let oldest = null;
+  container.querySelectorAll('.msg[data-ts], .msg[data-msg-id]').forEach((el) => {
+    const ts = Number(el.dataset.ts || 0);
+    if (ts && (oldest == null || ts < oldest)) oldest = ts;
+  });
+  // data-ts olmayabilir — time text'ten değil, msg listesinden
+  if (oldest == null) {
+    container.querySelectorAll('.msg').forEach((el) => {
+      const t = el.querySelector('.msg-time');
+      // fallback: skip
+    });
+  }
+  return oldest;
+}
+
+function prependMessageList(container, messages, resolve) {
+  if (!messages?.length) return;
+  const loader = ensureHistoryLoader(container);
+  const prevHeight = container.scrollHeight;
+  const prevTop = container.scrollTop;
+  const frag = document.createDocumentFragment();
+  let i = 0;
+  while (i < messages.length) {
+    const msg = messages[i];
+    if (msg?.id && container.querySelector(`[data-msg-id="${CSS.escape(String(msg.id))}"]`)) {
+      i += 1;
+      continue;
+    }
+    const meta = resolve(msg);
+    if (isAuthorBlocked(meta.authorId)) {
+      const group = [];
+      while (i < messages.length && isAuthorBlocked(resolve(messages[i]).authorId)) {
+        const m = messages[i++];
+        if (m?.id && container.querySelector(`[data-msg-id="${CSS.escape(String(m.id))}"]`)) continue;
+        group.push(m);
+      }
+      if (group.length) frag.appendChild(createBlockedGroup(group, resolve));
+    } else {
+      const el = makeMsgEl(meta.author, meta.text, meta.ts, meta.id, meta);
+      if (meta.ts) el.dataset.ts = String(meta.ts);
+      frag.appendChild(el);
+      i += 1;
+    }
+  }
+  loader.after(frag);
+  container.scrollTop = prevTop + (container.scrollHeight - prevHeight);
+}
+
+function bindHistoryScroll(container) {
+  if (container.dataset.historyScroll === '1') return;
+  container.dataset.historyScroll = '1';
+  container.addEventListener('scroll', () => {
+    if (container.scrollTop > 60) return;
+    if (container === $('chat-messages')) loadOlderChatMessages();
+    else if (container === $('dm-messages')) loadOlderDmMessages();
+  });
+}
+
+function loadOlderChatMessages() {
+  if (loadingOlderMsgs || !chatHasMore || !activeChannelId || activeView !== 'chat') return;
+  const container = $('chat-messages');
+  const beforeTs = getOldestMessageTs(container);
+  if (!beforeTs) { chatHasMore = false; return; }
+  loadingOlderMsgs = true;
+  const loader = ensureHistoryLoader(container);
+  loader.classList.remove('hidden');
+  loader.setAttribute('aria-hidden', 'false');
+  socket.emit('load-messages', { channelId: activeChannelId, beforeTs }, (res) => {
+    loadingOlderMsgs = false;
+    loader.classList.add('hidden');
+    loader.setAttribute('aria-hidden', 'true');
+    if (res?.error) { toast(res.error); return; }
+    chatHasMore = !!res.hasMore;
+    if ((res.messages || []).length) chatHistoryExpanded = true;
+    prependMessageList(container, res.messages || [], resolveChannelMsg);
+    if (!(res.messages || []).length) chatHasMore = false;
+  });
+}
+
+function loadOlderDmMessages() {
+  if (loadingOlderMsgs || !dmHasMore || !activeDmChannelId || activeView !== 'dm') return;
+  const container = $('dm-messages');
+  const beforeTs = getOldestMessageTs(container);
+  if (!beforeTs) { dmHasMore = false; return; }
+  loadingOlderMsgs = true;
+  const loader = ensureHistoryLoader(container);
+  loader.classList.remove('hidden');
+  loader.setAttribute('aria-hidden', 'false');
+  const friendId = activeDmFriendId;
+  socket.emit('load-dm-messages', { channelId: activeDmChannelId, beforeTs }, (res) => {
+    loadingOlderMsgs = false;
+    loader.classList.add('hidden');
+    loader.setAttribute('aria-hidden', 'true');
+    if (res?.error) { toast(res.error); return; }
+    dmHasMore = !!res.hasMore;
+    if ((res.messages || []).length) dmHistoryExpanded = true;
+    prependMessageList(container, res.messages || [], (m) => resolveDmMsg(m, friendId));
+    if (!(res.messages || []).length) dmHasMore = false;
+  });
 }
 
 function resolveChannelMsg(msg) {
@@ -1246,12 +1405,31 @@ function openTextChannel(channelId, name, push = true) {
   activeChannelId = channelId;
   activeDmFriendId = null;
   activeDmChannelId = null;
+  loadingOlderMsgs = false;
+  chatHistoryExpanded = false;
   $('chat-title').textContent = `# ${name}`;
-  $('chat-messages').innerHTML = '';
   setMainView('chat');
   renderChannels();
+
+  const cached = readMsgCache('chan', channelId);
+  if (cached?.messages?.length) {
+    chatHasMore = cached.hasMore !== false;
+    renderMessageList($('chat-messages'), cached.messages, resolveChannelMsg);
+  } else {
+    $('chat-messages').innerHTML = '';
+    ensureHistoryLoader($('chat-messages'));
+    chatHasMore = true;
+  }
+
   socket.emit('open-text-channel', { channelId }, (res) => {
     if (res.error) { toast(res.error); return; }
+    if (activeChannelId !== channelId) return;
+    writeMsgCache('chan', channelId, res.messages || [], res.hasMore);
+    if (chatHistoryExpanded) {
+      // Kullanıcı eski sayfaları açtıysa listeyi silme; hasMore'u sadece cache için tut
+      return;
+    }
+    chatHasMore = !!res.hasMore;
     renderMessageList($('chat-messages'), res.messages || [], resolveChannelMsg);
   });
   if (push && activeServer) navTo(`/channels/${activeServer.id}/${channelId}`);
@@ -1309,7 +1487,10 @@ $('chat-form').addEventListener('submit', (e) => {
       toast(res.error);
       return;
     }
-    if (res?.message) appendMessage($('chat-messages'), res.message);
+    if (res?.message) {
+      appendMessage($('chat-messages'), res.message);
+      appendMsgCache('chan', activeChannelId, res.message);
+    }
   });
 });
 
@@ -1322,29 +1503,48 @@ function openDM(friendId, push = true) {
   activeGroupId = null;
   activeGroupTitle = '';
   activeChannelId = null;
+  loadingOlderMsgs = false;
   friend.unread = false;
   friend.closed = false;
   showSidebarHome();
   setRailActive('home');
   $('dm-title').textContent = `@ ${friend.username}`;
-  $('dm-messages').innerHTML = '';
   dmFeatures?.closeSearchPanel?.();
   dmFeatures?.closePinsPanel?.();
   dmFeatures?.updateCallStage?.(friend.username);
   setMainView('dm');
   updateDmComposer();
   renderFriends();
+  dmHistoryExpanded = false;
+
+  const cacheId = friend.dmChannelId || activeDmChannelId;
+  const cached = cacheId ? readMsgCache('dm', cacheId) : null;
+  if (cached?.messages?.length) {
+    dmHasMore = cached.hasMore !== false;
+    renderDMMessages(cached.messages, friendId);
+  } else {
+    $('dm-messages').innerHTML = '';
+    ensureHistoryLoader($('dm-messages'));
+    dmHasMore = true;
+  }
+
   socket.emit('open-dm', { friendId }, (res) => {
     if (res.error) { toast(res.error); return; }
+    if (activeDmFriendId !== friendId) return;
     activeDmChannelId = res.dmChannelId;
     dmPins = res.pins || [];
     if (res.social) social = res.social;
     if (friend) {
       friend.blocked = !!res.blockedByMe;
       friend.blockedByThem = !!res.blockedByThem;
+      friend.dmChannelId = res.dmChannelId;
     }
     updateDmComposer();
-    renderDMMessages(res.messages, friendId);
+    writeMsgCache('dm', res.dmChannelId, res.messages || [], res.hasMore);
+    if (!dmHistoryExpanded) {
+      dmHasMore = !!res.hasMore;
+      renderDMMessages(res.messages, friendId);
+    }
     if (push) navTo(`/channels/@me/${res.dmChannelId}`);
   });
   closeDrawers();
@@ -1358,18 +1558,31 @@ function openGroupChannel(channel, push = true) {
   activeGroupTitle = channel.name || channel.title || 'Grup';
   activeDmChannelId = channel.id;
   activeChannelId = null;
+  loadingOlderMsgs = false;
+  dmHistoryExpanded = false;
   showSidebarHome();
   setRailActive('home');
   $('dm-title').textContent = activeGroupTitle;
-  $('dm-messages').innerHTML = '';
   dmFeatures?.closeSearchPanel?.();
   dmFeatures?.closePinsPanel?.();
   dmFeatures?.updateCallStage?.(activeGroupTitle);
   setMainView('dm');
   updateDmComposer();
   renderFriends();
+
+  const cached = readMsgCache('dm', channel.id);
+  if (cached?.messages?.length) {
+    dmHasMore = cached.hasMore !== false;
+    renderDMMessages(cached.messages, null);
+  } else {
+    $('dm-messages').innerHTML = '';
+    ensureHistoryLoader($('dm-messages'));
+    dmHasMore = true;
+  }
+
   socket.emit('get-dm-by-channel', { dmChannelId: channel.id }, (res) => {
     if (res.error) { toast(res.error); return; }
+    if (activeGroupId !== channel.id) return;
     if (res.channel) {
       const idx = groupDms.findIndex((g) => g.id === res.channel.id);
       if (idx >= 0) groupDms[idx] = { ...groupDms[idx], ...res.channel };
@@ -1379,7 +1592,11 @@ function openGroupChannel(channel, push = true) {
     }
     dmPins = res.pins || [];
     if (res.social) social = res.social;
-    renderDMMessages(res.messages, null);
+    writeMsgCache('dm', channel.id, res.messages || [], res.hasMore);
+    if (!dmHistoryExpanded) {
+      dmHasMore = !!res.hasMore;
+      renderDMMessages(res.messages, null);
+    }
     updatePanel();
     if (push) navTo(`/channels/@me/${channel.id}`);
   });
@@ -1387,6 +1604,17 @@ function openGroupChannel(channel, push = true) {
 }
 
 function openDMByChannel(dmChannelId, push = false) {
+  const cached = readMsgCache('dm', dmChannelId);
+  if (cached?.messages?.length) {
+    // Hızlı önizleme — tip bilinmiyor, DM olarak çiz; sunucu düzeltir
+    activeServer = null;
+    activeChannelId = null;
+    activeDmChannelId = dmChannelId;
+    setMainView('dm');
+    dmHasMore = cached.hasMore !== false;
+    renderDMMessages(cached.messages, activeDmFriendId);
+  }
+
   socket.emit('get-dm-by-channel', { dmChannelId }, (res) => {
     if (res.error) { toast(res.error); goHome(false); navTo('/channels/@me'); return; }
     if (res.type === 'group' || res.channel?.type === 'group') {
@@ -1398,22 +1626,27 @@ function openDMByChannel(dmChannelId, push = false) {
     activeGroupId = null;
     activeDmFriendId = res.friendId;
     activeDmChannelId = res.dmChannelId;
+    loadingOlderMsgs = false;
     if (res.social) social = res.social;
     const friend = friends.find((f) => f.id === res.friendId);
     if (friend) {
       friend.blocked = !!res.blockedByMe;
       friend.blockedByThem = !!res.blockedByThem;
+      friend.dmChannelId = res.dmChannelId;
     }
     showSidebarHome();
     setRailActive('home');
     renderFriends();
     $('dm-title').textContent = `@ ${res.friend.username}`;
-    $('dm-messages').innerHTML = '';
     dmFeatures?.updateCallStage?.(res.friend.username);
     setMainView('dm');
     updateDmComposer();
     dmPins = res.pins || [];
-    renderDMMessages(res.messages, res.friendId);
+    writeMsgCache('dm', res.dmChannelId, res.messages || [], res.hasMore);
+    if (!dmHistoryExpanded) {
+      dmHasMore = !!res.hasMore;
+      renderDMMessages(res.messages, res.friendId);
+    }
     if (push) navTo(`/channels/@me/${res.dmChannelId}`);
     closeDrawers();
   });
@@ -1458,7 +1691,10 @@ $('dm-form').addEventListener('submit', (e) => {
         toast(res.error);
         return;
       }
-      if (res.message) appendResolvedMessage($('dm-messages'), res.message, resolve);
+      if (res.message) {
+        appendResolvedMessage($('dm-messages'), res.message, resolve);
+        appendMsgCache('dm', activeGroupId, res.message);
+      }
     });
     return;
   }
@@ -1480,7 +1716,10 @@ $('dm-form').addEventListener('submit', (e) => {
       toast(res.error);
       return;
     }
-    if (res.message) appendResolvedMessage($('dm-messages'), res.message, resolve);
+    if (res.message) {
+      appendResolvedMessage($('dm-messages'), res.message, resolve);
+      appendMsgCache('dm', activeDmChannelId, res.message);
+    }
   });
 });
 
@@ -2642,11 +2881,13 @@ function connectSocket(token) {
     if (channelId === activeChannelId && activeView === 'chat') {
       appendMessage($('chat-messages'), message);
     }
+    if (channelId) appendMsgCache('chan', channelId, message);
   });
 
   socket.on('dm', ({ friendId, username, message, muted, ignored, blocked, channelId, type }) => {
     const isGroupView = type === 'group' || (channelId && activeGroupId === channelId);
     const isDmView = !isGroupView && activeDmFriendId === friendId && activeView === 'dm';
+    if (channelId) appendMsgCache('dm', channelId, message);
     if (activeView === 'dm' && (isDmView || (isGroupView && activeGroupId === channelId))) {
       appendResolvedMessage($('dm-messages'), message, (m) => resolveDmMsg(m, friendId));
       if (!blocked) {
