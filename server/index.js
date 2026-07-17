@@ -330,30 +330,37 @@ function kickDmCallParticipants(channelId) {
 
 function isOnline(userId) { return onlineUsers.has(userId); }
 
-async function friendsSnapshot(userId) {
-  const social = (await store.getSocial(userId)) || {};
+async function friendsSnapshot(userId, socialPreload = null) {
+  const social = socialPreload || (await store.getSocial(userId)) || {};
   const friends = await store.getFriends(userId);
-  const out = [];
-  for (const f of friends) {
-    const act = await store.getDmActivity(userId, f.id);
+  if (!friends.length) return [];
+  const ids = friends.map((f) => f.id);
+  const [actMap, blockedByThem] = await Promise.all([
+    store.getFriendsDmActivityMap(userId, ids),
+    store.getBlockedByThemSet(userId, ids),
+  ]);
+  const blockedMine = new Set(social.blocked || []);
+  const ignored = new Set(social.ignored || []);
+  const pinned = new Set(social.pinnedDms || []);
+  const closed = new Set(social.closedDms || []);
+  return friends.map((f) => {
+    const act = actMap.get(f.id) || {};
     const mutedUntil = social.mutedDms?.[f.id];
-    const bs = await store.blockState(userId, f.id);
-    out.push({
+    return {
       id: f.id,
       username: f.username,
       online: isOnline(f.id),
-      pinned: (social.pinnedDms || []).includes(f.id),
-      closed: (social.closedDms || []).includes(f.id),
+      pinned: pinned.has(f.id),
+      closed: closed.has(f.id),
       unread: !!social.unreadDms?.[f.id],
-      ignored: (social.ignored || []).includes(f.id),
-      blocked: bs.blockedByMe,
-      blockedByThem: bs.blockedByThem,
+      ignored: ignored.has(f.id),
+      blocked: blockedMine.has(f.id),
+      blockedByThem: blockedByThem.has(f.id),
       mutedUntil: mutedUntil === undefined ? null : mutedUntil,
       lastMessageAt: act.lastMessageAt || 0,
-      dmChannelId: act.dmChannelId,
-    });
-  }
-  return out;
+      dmChannelId: act.dmChannelId || null,
+    };
+  });
 }
 
 async function emitSocial(userId) {
@@ -513,14 +520,22 @@ io.on('connection', async (socket) => {
   if (wasOffline) onlineUsers.set(userId, new Set());
   onlineUsers.get(userId).add(socket.id);
 
+  const social = await store.getSocial(userId);
+  const [friends, friendRequests, servers, friendsVoice, groupDms] = await Promise.all([
+    friendsSnapshot(userId, social),
+    store.getFriendRequests(userId),
+    store.getUserServers(userId),
+    friendsVoiceSnapshot(userId),
+    store.getUserGroupDMs(userId),
+  ]);
   socket.emit('init', {
     user: { id: userId, username: socket.data.username },
-    friends: await friendsSnapshot(userId),
-    friendRequests: await store.getFriendRequests(userId),
-    social: await store.getSocial(userId),
-    servers: await store.getUserServers(userId),
-    friendsVoice: await friendsVoiceSnapshot(userId),
-    groupDms: await store.getUserGroupDMs(userId),
+    friends,
+    friendRequests,
+    social,
+    servers,
+    friendsVoice,
+    groupDms,
   });
   if (wasOffline) await notifyFriendsOfChange(userId);
 

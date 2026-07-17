@@ -1,8 +1,55 @@
-import { createVoiceManager } from './voice.js';
-import { initDmFeatures } from './dm-features.js';
-
 const $ = (id) => document.getElementById(id);
 const THEME_COLORS = { dark: '#0f1117', black: '#000000', light: '#f3f5f9' };
+
+const SPLASH_TIPS = [
+  'Sunucularına bağlanıyor…',
+  'Arkadaş listesi hazırlanıyor…',
+  'Kanallar yükleniyor…',
+  'Neredeyse hazır…',
+  'Did you know? Muck’ta mesajlar anında akar.',
+  'Sesli sohbet için bir kanala katılman yeterli.',
+];
+let splashTipTimer = null;
+
+function setSplashStatus(text) {
+  const el = $('splash-status');
+  if (el) el.textContent = text;
+}
+function startSplashTips() {
+  let i = 0;
+  setSplashStatus(SPLASH_TIPS[0]);
+  clearInterval(splashTipTimer);
+  splashTipTimer = setInterval(() => {
+    i = (i + 1) % SPLASH_TIPS.length;
+    setSplashStatus(SPLASH_TIPS[i]);
+  }, 2200);
+}
+function hideSplash() {
+  clearInterval(splashTipTimer);
+  splashTipTimer = null;
+  const splash = $('splash');
+  if (!splash) return;
+  splash.classList.add('splash-hide');
+  splash.setAttribute('aria-busy', 'false');
+  setTimeout(() => splash.classList.add('hidden'), 320);
+}
+
+let createVoiceManager = null;
+let initDmFeatures = null;
+let modulesReady = null;
+
+async function ensureAppModules() {
+  if (modulesReady) return modulesReady;
+  modulesReady = (async () => {
+    const [voiceMod, dmMod] = await Promise.all([
+      import('./voice.js'),
+      import('./dm-features.js'),
+    ]);
+    createVoiceManager = voiceMod.createVoiceManager;
+    initDmFeatures = dmMod.initDmFeatures;
+  })();
+  return modulesReady;
+}
 
 // State
 let socket = null;
@@ -201,7 +248,11 @@ function closeModal() { $('modal-overlay').classList.add('hidden'); }
 $('modal-overlay').addEventListener('click', (e) => { if (e.target === $('modal-overlay')) closeModal(); });
 
 /* ================= Views ================= */
-function showApp() { $('auth-view')?.classList.add('hidden'); $('app')?.classList.remove('hidden'); }
+function showApp() {
+  $('auth-view')?.classList.add('hidden');
+  $('app')?.classList.remove('hidden');
+  hideSplash();
+}
 function showAuth() { location.href = '/login'; }
 function accessToken() {
   return getCookie('muck_access') || getCookie('muck_token') || getCookie('streamuck_token');
@@ -2031,7 +2082,9 @@ function leaveVoiceChannel() {
   if (activeServer) navTo(`/channels/${activeServer.id}`);
 }
 
-function joinVoiceChannel(channelId, name, push = true) {
+async function joinVoiceChannel(channelId, name, push = true) {
+  await ensureAppModules();
+  if (!createVoiceManager) { toast('Ses modülü yüklenemedi.'); return; }
   if (voiceManager) voiceManager.leave();
   dmCallActive = false;
   dmCallRinging = false;
@@ -2821,11 +2874,19 @@ function connectSocket(token) {
     if (err.message === 'unauthorized') {
       deleteCookie('muck_access');
       deleteCookie('muck_token');
+      hideSplash();
       showAuth();
+      return;
     }
+    setSplashStatus('Bağlantı yeniden deneniyor…');
   });
 
-  socket.on('init', ({ user, friends: fr, friendRequests: frReq, servers: srv, social: soc, friendsVoice: fv, groupDms: gd }) => {
+  socket.on('connect', () => {
+    setSplashStatus('Veriler yükleniyor…');
+  });
+
+  socket.on('init', async ({ user, friends: fr, friendRequests: frReq, servers: srv, social: soc, friendsVoice: fv, groupDms: gd }) => {
+    setSplashStatus('Arayüz hazırlanıyor…');
     currentUser = user;
     friends = fr || [];
     friendRequests = frReq || { incoming: [], outgoing: [] };
@@ -2843,6 +2904,8 @@ function connectSocket(token) {
     updateFriendsBadge();
     showApp();
     applyRoute();
+    // Ağır modüller arayüz açıldıktan sonra
+    ensureAppModules().then(() => setupDeferredModules()).catch(() => {});
   });
 
   socket.on('social-update', ({ social: soc, friends: fr, groupDms: gd }) => {
@@ -3132,6 +3195,8 @@ function syncDmCallControls() {
 
 async function ensureVoiceManagerForDm() {
   if (voiceManager) return voiceManager;
+  await ensureAppModules();
+  if (!createVoiceManager) return null;
   voiceManager = createVoiceManager({
     socket,
     username: currentUser?.username,
@@ -3291,53 +3356,67 @@ function toggleDmScreen() { voiceManager?.toggleScreen(); }
 $('dm-incoming-accept')?.addEventListener('click', () => acceptIncomingDmCall());
 $('dm-incoming-reject')?.addEventListener('click', () => rejectIncomingDmCall());
 
-dmFeatures = initDmFeatures({
-  $, toast, escapeHtml, initials, formatTime, userChipHtml,
-  getSocket: () => socket,
-  getState: () => ({
-    friends, settings, activeDmFriendId, activeDmChannelId, activeGroupId, activeGroupTitle,
-    dmProfileOpen, dmPins,
-    activeDmFriendName: friends.find((f) => f.id === activeDmFriendId)?.username,
-  }),
-  setState: (patch) => {
-    if ('dmProfileOpen' in patch) dmProfileOpen = patch.dmProfileOpen;
-    if ('dmPins' in patch) dmPins = patch.dmPins;
-    if ('dmPanelMode' in patch) dmPanelMode = patch.dmPanelMode;
-  },
-  openGroupChannel,
-  openDM,
-  startDmCall,
-  endDmCall,
-  toggleDmMic,
-  toggleDmDeafen,
-  toggleDmCam,
-  toggleDmScreen,
-  updatePanel,
-  closeCtxMenu,
-  placeCtxMenu,
-  ctxItem,
-  ctxSep,
-  showModal,
-  closeModal,
-  markReply: (draft) => { dmReply = draft; },
-});
+function setupDeferredModules() {
+  if (!initDmFeatures || dmFeatures) return;
+  dmFeatures = initDmFeatures({
+    $, toast, escapeHtml, initials, formatTime, userChipHtml,
+    getSocket: () => socket,
+    getState: () => ({
+      friends, settings, activeDmFriendId, activeDmChannelId, activeGroupId, activeGroupTitle,
+      dmProfileOpen, dmPins,
+      activeDmFriendName: friends.find((f) => f.id === activeDmFriendId)?.username,
+    }),
+    setState: (patch) => {
+      if ('dmProfileOpen' in patch) dmProfileOpen = patch.dmProfileOpen;
+      if ('dmPins' in patch) dmPins = patch.dmPins;
+      if ('dmPanelMode' in patch) dmPanelMode = patch.dmPanelMode;
+    },
+    openGroupChannel,
+    openDM,
+    startDmCall,
+    endDmCall,
+    toggleDmMic,
+    toggleDmDeafen,
+    toggleDmCam,
+    toggleDmScreen,
+    updatePanel,
+    closeCtxMenu,
+    placeCtxMenu,
+    ctxItem,
+    ctxSep,
+    showModal,
+    closeModal,
+    markReply: (draft) => { dmReply = draft; },
+  });
+}
 
 /* ================= PWA ================= */
-// Service worker kaydı index.html'de (erken keşif). Burada yalnızca güncelleme kontrolü.
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.ready.catch(() => {});
 }
 
 /* ================= Boot ================= */
 (async function boot() {
+  startSplashTips();
   loadSettings();
   applySettings();
   const token = accessToken();
-  if (!token) { $('splash').classList.add('hidden'); showAuth(); return; }
-  try {
-    const res = await fetch('/api/me', { credentials: 'same-origin', headers: { Authorization: `Bearer ${token}` } });
-    if (res.ok) { const { user } = await res.json(); currentUser = user; connectSocket(token); }
-    else { deleteCookie('muck_access'); deleteCookie('muck_token'); showAuth(); }
-  } catch { showAuth(); }
-  finally { $('splash').classList.add('hidden'); }
+  if (!token) {
+    hideSplash();
+    showAuth();
+    return;
+  }
+  setSplashStatus('Oturum doğrulanıyor…');
+  // /api/me turunu atla — socket auth + init tek seferde yeter
+  connectSocket(token);
+  setSplashStatus('Sunucuya bağlanılıyor…');
+  // Bağlantı takılırsa kullanıcıyı bilgilendir
+  setTimeout(() => {
+    if ($('splash') && !$('splash').classList.contains('splash-hide') && !$('app')?.classList.contains('hidden') === false) {
+      /* app still hidden */
+    }
+    if ($('app')?.classList.contains('hidden') && !$('splash')?.classList.contains('hidden')) {
+      setSplashStatus('Bağlantı bekleniyor…');
+    }
+  }, 4000);
 })();

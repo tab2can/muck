@@ -40,10 +40,22 @@
   <meta name="twitter:description" content="Sunucular, kanallar ve sesli sohbet." />
   <meta name="twitter:image" content="https://muck.tr/icons/icon-512.png" />
 
+  <style id="splash-critical">
+    html,body{height:100%;margin:0;background:#0f1117;color:#eceef3}
+    #splash{position:fixed;inset:0;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1.25rem;background:#0f1117;transition:opacity .28s ease,visibility .28s ease}
+    #splash.splash-hide{opacity:0;visibility:hidden;pointer-events:none}
+    #splash .splash-logo{width:88px;height:88px;border-radius:22px;box-shadow:0 12px 40px rgba(0,0,0,.45)}
+    #splash .splash-brand{font:800 1.55rem/1.1 system-ui,Segoe UI,sans-serif;letter-spacing:-.02em;margin:0}
+    #splash .splash-status{font:500 .95rem/1.4 system-ui,Segoe UI,sans-serif;color:#99a1b3;min-height:1.4em;text-align:center;padding:0 1.5rem;max-width:22rem}
+    #splash .splash-bar{width:140px;height:4px;border-radius:99px;background:#222633;overflow:hidden;margin-top:.15rem}
+    #splash .splash-bar>i{display:block;height:100%;width:35%;border-radius:99px;background:#5b8def;animation:splashSlide 1.1s ease-in-out infinite}
+    @keyframes splashSlide{0%{transform:translateX(-120%)}100%{transform:translateX(360%)}}
+  </style>
   <link rel="stylesheet" href="/style.css" />
   <link rel="stylesheet" href="/dm-features.css" />
+  <link rel="preload" href="/app.js" as="script" />
+  <link rel="preload" href="/socket.io/socket.io.js" as="script" />
   <script>
-    // PWABuilder / tarayıcı keşfi için service worker'ı HTML'de erken kaydet
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', function () {
         navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(function () {});
@@ -61,7 +73,12 @@
   </script>
 </head>
 <body>
-  <div id="splash" class="splash"><img src="/icon.png" alt="" class="splash-icon" /></div>
+  <div id="splash" class="splash" role="status" aria-live="polite" aria-busy="true">
+    <img src="/icons/icon-192.png" alt="Muck" class="splash-logo" width="88" height="88" />
+    <p class="splash-brand">Muck</p>
+    <p class="splash-status" id="splash-status">Başlatılıyor…</p>
+    <div class="splash-bar" aria-hidden="true"><i></i></div>
+  </div>
 
   <!-- Auth -->
   <div id="auth-view" class="view hidden">

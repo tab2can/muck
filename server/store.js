@@ -1060,8 +1060,86 @@ export async function isGroupMuted(userId, channelId) {
   return true;
 }
 
+export async function findExistingDMChannel(a, b) {
+  const { data: myChannels } = await supabase.from('dm_members').select('channel_id').eq('user_id', a);
+  if (!myChannels?.length) return null;
+  const ids = myChannels.map((r) => r.channel_id);
+  const { data: channels } = await supabase
+    .from('dm_channels')
+    .select('*')
+    .in('id', ids)
+    .eq('type', 'dm');
+  for (const ch of channels || []) {
+    const { data: mem } = await supabase.from('dm_members').select('user_id').eq('channel_id', ch.id);
+    const users = (mem || []).map((m) => m.user_id);
+    if (users.includes(b) && users.length === 2) {
+      return {
+        id: ch.id,
+        type: ch.type,
+        name: ch.name,
+        ownerId: ch.owner_id,
+        users,
+        createdAt: new Date(ch.created_at).getTime(),
+        lastMessageAt: ch.last_message_at ? new Date(ch.last_message_at).getTime() : 0,
+        lastFromId: ch.last_from_id,
+      };
+    }
+  }
+  return null;
+}
+
+/** Tüm arkadaşlar için DM aktivitesi — N+1 yerine toplu */
+export async function getFriendsDmActivityMap(userId, friendIds) {
+  const map = new Map();
+  for (const id of friendIds) map.set(id, { lastMessageAt: 0, lastFromId: null, dmChannelId: null });
+  if (!friendIds?.length) return map;
+
+  const { data: myMemberships } = await supabase.from('dm_members').select('channel_id').eq('user_id', userId);
+  const channelIds = (myMemberships || []).map((r) => r.channel_id);
+  if (!channelIds.length) return map;
+
+  const [{ data: channels }, { data: allMem }] = await Promise.all([
+    supabase.from('dm_channels').select('id, last_message_at, last_from_id').in('id', channelIds).eq('type', 'dm'),
+    supabase.from('dm_members').select('channel_id, user_id').in('channel_id', channelIds),
+  ]);
+  if (!channels?.length) return map;
+
+  const membersByChan = new Map();
+  for (const m of allMem || []) {
+    if (!membersByChan.has(m.channel_id)) membersByChan.set(m.channel_id, []);
+    membersByChan.get(m.channel_id).push(m.user_id);
+  }
+  const friendSet = new Set(friendIds);
+  for (const ch of channels) {
+    const users = membersByChan.get(ch.id) || [];
+    if (users.length !== 2) continue;
+    const other = users.find((id) => id !== userId);
+    if (!other || !friendSet.has(other)) continue;
+    map.set(other, {
+      lastMessageAt: ch.last_message_at ? new Date(ch.last_message_at).getTime() : 0,
+      lastFromId: ch.last_from_id || null,
+      dmChannelId: ch.id,
+    });
+  }
+  return map;
+}
+
+export async function getBlockedByThemSet(viewerId, otherIds) {
+  if (!otherIds?.length) return new Set();
+  const { data } = await supabase
+    .from('user_social')
+    .select('user_id, blocked')
+    .in('user_id', otherIds);
+  const set = new Set();
+  for (const row of data || []) {
+    if ((row.blocked || []).includes(viewerId)) set.add(row.user_id);
+  }
+  return set;
+}
+
 export async function getDmActivity(userId, friendId) {
-  const channel = await getOrCreateDMChannel(userId, friendId);
+  const channel = await findExistingDMChannel(userId, friendId);
+  if (!channel) return { lastMessageAt: 0, lastFromId: null, dmChannelId: null };
   return {
     lastMessageAt: channel.lastMessageAt || 0,
     lastFromId: channel.lastFromId || null,
