@@ -1,4 +1,4 @@
-const CACHE = 'muck-v25';
+const CACHE = 'muck-v26';
 const PRECACHE = [
   '/',
   '/index.html',
@@ -16,6 +16,7 @@ const PRECACHE = [
   '/app.js',
   '/voice.js',
   '/dm-features.js',
+  '/chat-features.js',
   '/auth-login.js',
   '/auth-register.js',
   '/auth-common.js',

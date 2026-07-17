@@ -244,6 +244,14 @@
 .msg-reaction.mine {
   border-color: var(--accent); background: var(--accent-soft);
 }
+.msg-flash {
+  animation: msgFlash 1.1s ease;
+  border-radius: 8px;
+}
+@keyframes msgFlash {
+  0%, 100% { background: transparent; }
+  30% { background: var(--accent-soft); }
+}
 
 #panel-dm-search, #panel-dm-pins {
   display: flex; flex-direction: column; min-height: 0; flex: 1;

@@ -639,14 +639,25 @@ async function trimOldChannelMessages(channelId) {
   }
 }
 
-export async function pushMessage(channelId, userId, username, text) {
+export async function pushMessage(channelId, userId, username, text, replyTo = null) {
+  const payload = replyTo ? {
+    id: replyTo.id,
+    fromId: replyTo.fromId || replyTo.userId,
+    text: String(replyTo.text || '').slice(0, 200),
+    username: replyTo.username || null,
+  } : null;
+  const row = {
+    channel_id: channelId,
+    author_id: userId,
+    content: text.trim(),
+  };
+  if (payload) row.reply_to = payload;
   const { data, error } = await supabase
     .from('messages')
-    .insert({ channel_id: channelId, author_id: userId, content: text.trim() })
+    .insert(row)
     .select('*')
     .single();
   if (error) throw new Error(error.message);
-  // Trim arka planda — emit'i geciktirmesin
   trimOldChannelMessages(channelId).catch(() => {});
   return {
     id: data.id,
@@ -655,6 +666,8 @@ export async function pushMessage(channelId, userId, username, text) {
     text: data.content,
     ts: new Date(data.created_at).getTime(),
     mediaUrls: data.media_urls || [],
+    reactions: data.reactions || {},
+    replyTo: data.reply_to || null,
   };
 }
 
@@ -681,9 +694,62 @@ export async function getMessages(channelId, { limit = PAGE_SIZE, beforeTs = nul
       text: m.content,
       ts: new Date(m.created_at).getTime(),
       mediaUrls: m.media_urls || [],
+      reactions: m.reactions || {},
+      replyTo: m.reply_to || null,
     })),
     hasMore,
   };
+}
+
+async function enrichSearchRows(rows) {
+  const authorIds = [...new Set((rows || []).map((m) => m.author_id))];
+  const authors = await Promise.all(authorIds.map((id) => findById(id)));
+  const byId = new Map(authors.filter(Boolean).map((u) => [u.id, u]));
+  return (rows || []).map((m) => ({
+    id: m.id,
+    fromId: m.author_id,
+    userId: m.author_id,
+    username: byId.get(m.author_id)?.username || '—',
+    text: m.content,
+    ts: new Date(m.created_at).getTime(),
+    reactions: m.reactions || {},
+    replyTo: m.reply_to || null,
+  }));
+}
+
+export async function searchDmChannel(userId, channelId, query, limit = 50) {
+  const channel = await getDMChannelById(channelId);
+  if (!channel || !channel.users.includes(userId)) return { error: 'Yetkiniz yok.' };
+  const q = String(query || '').trim();
+  if (!q) return { results: [], messages: [] };
+  const { data, error } = await supabase
+    .from('dm_messages')
+    .select('*')
+    .eq('channel_id', channelId)
+    .ilike('content', `%${q}%`)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) return { error: error.message };
+  const results = await enrichSearchRows(data || []);
+  return { results, messages: results };
+}
+
+export async function searchChannel(userId, channelId, query, limit = 50) {
+  const found = await findChannel(channelId);
+  if (!found || !isMember(found.server, userId)) return { error: 'Yetkiniz yok.' };
+  if (found.channel.type !== 'text') return { error: 'Metin kanalı değil.' };
+  const q = String(query || '').trim();
+  if (!q) return { results: [], messages: [] };
+  const { data, error } = await supabase
+    .from('messages')
+    .select('*')
+    .eq('channel_id', channelId)
+    .ilike('content', `%${q}%`)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) return { error: error.message };
+  const results = await enrichSearchRows(data || []);
+  return { results, messages: results };
 }
 
 // ---- DMs ----
@@ -871,16 +937,6 @@ export async function getDMs(userId, friendId, opts = {}) {
   return getDmChannelMessages(channel.id, opts);
 }
 
-export async function searchDmChannel(userId, channelId, query, limit = 50) {
-  const channel = await getDMChannelById(channelId);
-  if (!channel || !channel.users.includes(userId)) return { error: 'Yetkiniz yok.' };
-  const q = String(query || '').trim().toLowerCase();
-  if (!q) return { messages: [] };
-  const { messages: msgs } = await getDmChannelMessages(channelId, { limit: 200 });
-  const filtered = msgs.filter((m) => m.text.toLowerCase().includes(q)).slice(-limit);
-  return { messages: filtered };
-}
-
 export async function pinDmMessage(userId, channelId, messageId, pinned = true) {
   const channel = await getDMChannelById(channelId);
   if (!channel || !channel.users.includes(userId)) return { error: 'Yetkiniz yok.' };
@@ -918,6 +974,7 @@ export async function getDmPins(userId, channelId) {
   for (const p of data || []) {
     const author = await findById(p.from_id);
     pins.push({
+      id: p.message_id,
       messageId: p.message_id,
       fromId: p.from_id,
       text: p.text,
@@ -945,6 +1002,76 @@ export async function reactDmMessage(userId, channelId, messageId, emoji) {
   if (list.length) reactions[e] = list;
   else delete reactions[e];
   await supabase.from('dm_messages').update({ reactions }).eq('id', messageId);
+  return { messageId, reactions };
+}
+
+export async function pinChannelMessage(userId, channelId, messageId, pinned = true) {
+  const found = await findChannel(channelId);
+  if (!found || !isMember(found.server, userId)) return { error: 'Yetkiniz yok.' };
+  if (found.channel.type !== 'text') return { error: 'Metin kanalı değil.' };
+  if (!pinned) {
+    await supabase.from('channel_pins').delete().eq('channel_id', channelId).eq('message_id', messageId);
+    return { pins: (await getChannelPins(userId, channelId)).pins };
+  }
+  const { data: msg } = await supabase.from('messages').select('*').eq('id', messageId).maybeSingle();
+  if (!msg || msg.channel_id !== channelId) return { error: 'Mesaj bulunamadı.' };
+  const { count } = await supabase
+    .from('channel_pins')
+    .select('*', { count: 'exact', head: true })
+    .eq('channel_id', channelId);
+  if ((count || 0) >= 50) return { error: 'En fazla 50 sabitlenmiş mesaj.' };
+  await supabase.from('channel_pins').upsert({
+    channel_id: channelId,
+    message_id: messageId,
+    from_id: msg.author_id,
+    text: msg.content,
+    ts: msg.created_at,
+    pinned_by: userId,
+  });
+  return { pins: (await getChannelPins(userId, channelId)).pins };
+}
+
+export async function getChannelPins(userId, channelId) {
+  const found = await findChannel(channelId);
+  if (!found || !isMember(found.server, userId)) return { error: 'Yetkiniz yok.' };
+  const { data } = await supabase
+    .from('channel_pins')
+    .select('*')
+    .eq('channel_id', channelId)
+    .order('pinned_at', { ascending: false });
+  const pins = [];
+  for (const p of data || []) {
+    const author = await findById(p.from_id);
+    pins.push({
+      id: p.message_id,
+      messageId: p.message_id,
+      fromId: p.from_id,
+      text: p.text,
+      ts: p.ts ? new Date(p.ts).getTime() : null,
+      pinnedBy: p.pinned_by,
+      pinnedAt: new Date(p.pinned_at).getTime(),
+      username: author?.username || '—',
+    });
+  }
+  return { pins };
+}
+
+export async function reactChannelMessage(userId, channelId, messageId, emoji) {
+  const found = await findChannel(channelId);
+  if (!found || !isMember(found.server, userId)) return { error: 'Yetkiniz yok.' };
+  if (found.channel.type !== 'text') return { error: 'Metin kanalı değil.' };
+  const e = String(emoji || '').slice(0, 16);
+  if (!e) return { error: 'Emoji gerekli.' };
+  const { data: msg } = await supabase.from('messages').select('*').eq('id', messageId).maybeSingle();
+  if (!msg || msg.channel_id !== channelId) return { error: 'Mesaj bulunamadı.' };
+  const reactions = { ...(msg.reactions || {}) };
+  const list = Array.isArray(reactions[e]) ? [...reactions[e]] : [];
+  const idx = list.indexOf(userId);
+  if (idx >= 0) list.splice(idx, 1);
+  else list.push(userId);
+  if (list.length) reactions[e] = list;
+  else delete reactions[e];
+  await supabase.from('messages').update({ reactions }).eq('id', messageId);
   return { messageId, reactions };
 }
 

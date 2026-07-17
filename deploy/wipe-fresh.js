@@ -60,7 +60,7 @@ async function wipeViaRpc() {
     console.error('Veya SQL Editor\'da doğrudan:');
     console.error(`
 truncate table
-  public.dm_pins, public.dm_messages, public.dm_members, public.dm_channels,
+  public.dm_pins, public.channel_pins, public.dm_messages, public.dm_members, public.dm_channels,
   public.messages, public.member_roles, public.role_permissions, public.roles,
   public.channels, public.server_members, public.servers, public.friendships,
   public.friend_requests, public.user_social, public.profiles

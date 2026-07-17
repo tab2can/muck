@@ -3,6 +3,7 @@
 1. SQL Editor’da sırayla çalıştır:
    - `migrations/001_init.sql`
    - `migrations/002_grants_and_wipe.sql` (GRANT + wipe RPC)
+   - `migrations/003_channel_msg_parity.sql` (kanal tepki/yanıt/pin + arama index)
 2. Auth → Providers → Email: Confirm email açık
 3. Auth → URL Configuration:
    - Site URL: `https://muck.tr`

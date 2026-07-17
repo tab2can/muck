@@ -755,8 +755,15 @@ io.on('connection', async (socket) => {
     if (socket.data.textChannelId) socket.leave(`chan:${socket.data.textChannelId}`);
     socket.join(`chan:${channelId}`);
     socket.data.textChannelId = channelId;
-    const page = await store.getMessages(channelId, { limit: 20 });
-    cb?.({ messages: page.messages, hasMore: page.hasMore });
+    const [page, pinRes] = await Promise.all([
+      store.getMessages(channelId, { limit: 20 }),
+      store.getChannelPins(userId, channelId),
+    ]);
+    cb?.({
+      messages: page.messages,
+      hasMore: page.hasMore,
+      pins: pinRes.pins || [],
+    });
   });
 
   socket.on('load-messages', async ({ channelId, beforeTs }, cb) => {
@@ -767,9 +774,8 @@ io.on('connection', async (socket) => {
     cb?.({ messages: page.messages, hasMore: page.hasMore });
   });
 
-  socket.on('send-message', async ({ channelId, text }, cb) => {
+  socket.on('send-message', async ({ channelId, text, replyTo }, cb) => {
     if (!text?.trim()) return cb?.({ error: 'Boş mesaj.' });
-    // Kanal zaten açıksa tekrar DB membership sorgusu yapma
     if (socket.data.textChannelId !== channelId) {
       const found = await store.findChannel(channelId);
       if (!found || !store.isMember(found.server, userId)) return cb?.({ error: 'Yetkiniz yok.' });
@@ -778,12 +784,38 @@ io.on('connection', async (socket) => {
       socket.data.textChannelId = channelId;
     }
     try {
-      const msg = await store.pushMessage(channelId, userId, socket.data.username, text);
+      const msg = await store.pushMessage(channelId, userId, socket.data.username, text, replyTo || null);
       cb?.({ success: true, message: msg });
       socket.to(`chan:${channelId}`).emit('message', { channelId, message: msg });
     } catch (err) {
       cb?.({ error: err.message || 'Mesaj gönderilemedi.' });
     }
+  });
+
+  socket.on('search-channel', async ({ channelId, query }, cb) => {
+    cb?.(await store.searchChannel(userId, channelId, query));
+  });
+
+  socket.on('pin-channel-message', async ({ channelId, messageId, pinned }, cb) => {
+    const result = await store.pinChannelMessage(userId, channelId, messageId, pinned !== false);
+    if (result.error) return cb?.({ error: result.error });
+    cb?.(result);
+    io.to(`chan:${channelId}`).emit('channel-pins-updated', { channelId, pins: result.pins });
+  });
+
+  socket.on('get-channel-pins', async ({ channelId }, cb) => {
+    cb?.(await store.getChannelPins(userId, channelId));
+  });
+
+  socket.on('react-channel-message', async ({ channelId, messageId, emoji }, cb) => {
+    const result = await store.reactChannelMessage(userId, channelId, messageId, emoji);
+    if (result.error) return cb?.({ error: result.error });
+    cb?.(result);
+    io.to(`chan:${channelId}`).emit('channel-reaction', {
+      channelId,
+      messageId: result.messageId,
+      reactions: result.reactions,
+    });
   });
 
   // ---- DMs ----

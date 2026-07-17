@@ -227,7 +227,18 @@
             <button type="button" class="friends-tab friends-tab--add" data-friends-tab="add">Ekle</button>
           </div>
         </div>
-        <div id="head-chat" class="view-head chat-head hidden"><span id="chat-title"># genel</span></div>
+        <div id="head-chat" class="view-head chat-head dm-head hidden">
+          <div class="dm-head-left"><span id="chat-title"># genel</span></div>
+          <div class="dm-head-actions">
+            <button type="button" class="dm-tool-btn" id="chat-btn-pins" title="Sabitlenmiş Mesajlar" aria-label="Sabitlenmiş Mesajlar">
+              <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>
+            </button>
+            <label class="dm-search-field">
+              <input type="search" id="chat-search-input" placeholder="Ara" autocomplete="off" />
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M10 2a8 8 0 1 0 5.3 14.1l4.3 4.3 1.4-1.4-4.3-4.3A8 8 0 0 0 10 2Zm0 2a6 6 0 1 1 0 12A6 6 0 0 1 10 4Z"/></svg>
+            </label>
+          </div>
+        </div>
         <div id="head-dm" class="view-head chat-head dm-head hidden">
           <div class="dm-head-left"><span id="dm-title">@ kullanıcı</span></div>
           <div class="dm-head-actions">
@@ -290,8 +301,18 @@
           <!-- Metin sohbet -->
           <div id="view-chat" class="main-view hidden">
             <div class="chat-messages" id="chat-messages"></div>
+            <div id="chat-reply-bar" class="dm-reply-bar hidden">
+              <div class="dm-reply-bar-body">
+                <span class="dm-reply-bar-label">Yanıtlanıyor</span>
+                <span class="dm-reply-bar-text" id="chat-reply-text">—</span>
+              </div>
+              <button type="button" class="icon-btn icon-btn--sm" id="chat-reply-cancel" aria-label="İptal">×</button>
+            </div>
             <form class="chat-input" id="chat-form">
               <input id="chat-input" type="text" placeholder="Mesaj yaz…" autocomplete="off" maxlength="2000" />
+              <button type="button" class="dm-emoji-btn" id="chat-emoji-btn" title="Emoji" aria-label="Emoji">
+                <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2Zm-3.5 7.5A1.5 1.5 0 1 1 7 11a1.5 1.5 0 0 1 1.5-1.5Zm7 0A1.5 1.5 0 1 1 14 11a1.5 1.5 0 0 1 1.5-1.5ZM12 18a5.5 5.5 0 0 1-5-3h10a5.5 5.5 0 0 1-5 3Z"/></svg>
+              </button>
               <button type="submit" class="btn btn-primary btn-send" aria-label="Gönder">
                 <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M3.4 20.6 21 12 3.4 3.4l2.8 7.2L16 12l-9.8 1.4-2.8 7.2Z"/></svg>
               </button>
@@ -355,6 +376,7 @@
           <div id="view-voice" class="main-view hidden">
             <div class="voice-grid" id="voice-grid"></div>
           </div>
+          <div id="chat-emoji-panel" class="emoji-panel hidden" role="dialog" aria-label="Emoji seç"></div>
         </main>
 
         <!-- Sağ panel -->
@@ -382,18 +404,18 @@
           </div>
           <div id="panel-dm-search" class="hidden">
             <div class="dm-side-panel-head">
-              <span id="dm-search-count">0 Sonuç</span>
-              <button type="button" class="icon-btn icon-btn--sm" id="dm-search-close" aria-label="Kapat">×</button>
+              <span id="chat-search-count">0 Sonuç</span>
+              <button type="button" class="icon-btn icon-btn--sm" id="chat-search-close" aria-label="Kapat">×</button>
             </div>
-            <div class="dm-side-panel-sub" id="dm-search-context">@</div>
-            <div id="dm-search-results" class="dm-search-results"></div>
+            <div class="dm-side-panel-sub" id="chat-search-context">@</div>
+            <div id="chat-search-results" class="dm-search-results"></div>
           </div>
           <div id="panel-dm-pins" class="hidden">
             <div class="dm-side-panel-head">
               <span>Sabitlenmiş Mesajlar</span>
-              <button type="button" class="icon-btn icon-btn--sm" id="dm-pins-close" aria-label="Kapat">×</button>
+              <button type="button" class="icon-btn icon-btn--sm" id="chat-pins-close" aria-label="Kapat">×</button>
             </div>
-            <div id="dm-pins-results" class="dm-search-results"></div>
+            <div id="chat-pins-results" class="dm-search-results"></div>
           </div>
         </aside>
       </div>

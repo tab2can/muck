@@ -41,12 +41,12 @@ let modulesReady = null;
 async function ensureAppModules() {
   if (modulesReady) return modulesReady;
   modulesReady = (async () => {
-    const [voiceMod, dmMod] = await Promise.all([
+    const [voiceMod, chatMod] = await Promise.all([
       import('./voice.js'),
-      import('./dm-features.js'),
+      import('./chat-features.js'),
     ]);
     createVoiceManager = voiceMod.createVoiceManager;
-    initDmFeatures = dmMod.initDmFeatures;
+    initDmFeatures = chatMod.initChatFeatures;
   })();
   return modulesReady;
 }
@@ -290,7 +290,21 @@ function updatePanel() {
     renderActiveNow();
     active?.classList.remove('hidden');
     app.classList.add('with-panel');
-  } else if (activeServer && (activeView === 'chat' || activeView === 'voice' || activeView === 'empty')) {
+  } else if (activeView === 'chat' && activeChannelId) {
+    if (dmPanelMode === 'search') {
+      searchPanel?.classList.remove('hidden');
+      app.classList.add('with-panel');
+    } else if (dmPanelMode === 'pins') {
+      pinsPanel?.classList.remove('hidden');
+      app.classList.add('with-panel');
+    } else if (activeServer) {
+      renderMembers();
+      members?.classList.remove('hidden');
+      app.classList.add('with-panel');
+    } else {
+      app.classList.remove('with-panel');
+    }
+  } else if (activeServer && (activeView === 'voice' || activeView === 'empty')) {
     renderMembers();
     members?.classList.remove('hidden');
     app.classList.add('with-panel');
@@ -1109,20 +1123,24 @@ function makeMsgEl(author, text, ts, msgId = null, extra = {}) {
       <div class="msg-text">${escapeHtml(text)}</div>
       ${reactHtml}
     </div>`;
-  if (msgId && !extra.pending && activeView === 'dm' && activeDmChannelId) {
+  if (msgId && !extra.pending && ((activeView === 'dm' && activeDmChannelId) || (activeView === 'chat' && activeChannelId))) {
     div.dataset.allowMenu = '1';
     div.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       e.stopPropagation();
+      const channelId = activeView === 'chat' ? activeChannelId : activeDmChannelId;
       dmFeatures?.openMessageMenu?.(e.clientX, e.clientY, {
-        id: msgId, text, fromId: extra.fromId || null, ts, username: author, author,
-      }, activeDmChannelId);
+        id: msgId, text, fromId: extra.fromId || extra.authorId || null, userId: extra.authorId || null,
+        ts, username: author, author,
+      }, channelId);
     });
     div.querySelectorAll('.msg-reaction').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        socket.emit('react-dm-message', {
-          channelId: activeDmChannelId,
+        const channelId = activeView === 'chat' ? activeChannelId : activeDmChannelId;
+        const ev = activeView === 'chat' ? 'react-channel-message' : 'react-dm-message';
+        socket.emit(ev, {
+          channelId,
           messageId: msgId,
           emoji: btn.dataset.emoji,
         });
@@ -1235,14 +1253,15 @@ function confirmPendingMessage(container, realMsg, resolve) {
     const timeEl = match.querySelector('.msg-time');
     if (timeEl) timeEl.textContent = formatTime(meta.ts);
   }
-  // Menü bağla (DM)
-  if (activeView === 'dm' && activeDmChannelId && !match.dataset.allowMenu) {
+  // Menü bağla (DM / kanal)
+  if (((activeView === 'dm' && activeDmChannelId) || (activeView === 'chat' && activeChannelId)) && !match.dataset.allowMenu) {
     match.dataset.allowMenu = '1';
     const author = match.querySelector('.msg-author')?.textContent || '';
     const bodyText = match.querySelector('.msg-text')?.textContent || '';
     match.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       e.stopPropagation();
+      const channelId = activeView === 'chat' ? activeChannelId : activeDmChannelId;
       dmFeatures?.openMessageMenu?.(e.clientX, e.clientY, {
         id: realMsg.id,
         text: bodyText,
@@ -1250,7 +1269,7 @@ function confirmPendingMessage(container, realMsg, resolve) {
         ts: meta.ts,
         username: author,
         author,
-      }, activeDmChannelId);
+      }, channelId);
     });
   }
   return true;
@@ -1371,6 +1390,67 @@ function bindHistoryScroll(container) {
   });
 }
 
+function applyReactionsToEl(el, channelId, messageId, reactions, reactEvent) {
+  const body = el.querySelector('.msg-body');
+  if (!body) return;
+  body.querySelector('.msg-reactions')?.remove();
+  const entries = Object.entries(reactions || {}).filter(([, users]) => users?.length);
+  if (!entries.length) return;
+  const wrap = document.createElement('div');
+  wrap.className = 'msg-reactions';
+  wrap.innerHTML = entries.map(([emoji, users]) => {
+    const mine = users.includes(currentUser?.id);
+    return `<button type="button" class="msg-reaction${mine ? ' mine' : ''}" data-emoji="${escapeHtml(emoji)}">${emoji} <span>${users.length}</span></button>`;
+  }).join('');
+  wrap.querySelectorAll('.msg-reaction').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      socket.emit(reactEvent, { channelId, messageId, emoji: btn.dataset.emoji });
+    });
+  });
+  body.appendChild(wrap);
+}
+
+async function prependOlderForJump(kind, messageId, targetTs) {
+  const isChan = kind === 'channel';
+  const container = isChan ? $('chat-messages') : $('dm-messages');
+  if (!container) return null;
+  let found = container.querySelector(`[data-msg-id="${CSS.escape(String(messageId))}"]`);
+  if (found) return found;
+  let guard = 0;
+  while (guard++ < 25) {
+    const hasMore = isChan ? chatHasMore : dmHasMore;
+    if (!hasMore) break;
+    const beforeTs = getOldestMessageTs(container);
+    if (!beforeTs) break;
+    if (targetTs && beforeTs <= targetTs - 1) {
+      // devam et — hedef daha eski olabilir
+    }
+    const page = await new Promise((resolve) => {
+      const ev = isChan ? 'load-messages' : 'load-dm-messages';
+      const channelId = isChan ? activeChannelId : activeDmChannelId;
+      socket.emit(ev, { channelId, beforeTs }, (res) => resolve(res || {}));
+    });
+    if (page.error || !(page.messages || []).length) {
+      if (isChan) chatHasMore = false;
+      else dmHasMore = false;
+      break;
+    }
+    if (isChan) {
+      chatHasMore = !!page.hasMore;
+      chatHistoryExpanded = true;
+      prependMessageList(container, page.messages, resolveChannelMsg);
+    } else {
+      dmHasMore = !!page.hasMore;
+      dmHistoryExpanded = true;
+      prependMessageList(container, page.messages, (m) => resolveDmMsg(m, activeDmFriendId));
+    }
+    found = container.querySelector(`[data-msg-id="${CSS.escape(String(messageId))}"]`);
+    if (found) return found;
+  }
+  return container.querySelector(`[data-msg-id="${CSS.escape(String(messageId))}"]`);
+}
+
 function loadOlderChatMessages() {
   if (loadingOlderMsgs || !chatHasMore || !activeChannelId || activeView !== 'chat') return;
   const container = $('chat-messages');
@@ -1458,6 +1538,10 @@ function openTextChannel(channelId, name, push = true) {
   activeDmChannelId = null;
   loadingOlderMsgs = false;
   chatHistoryExpanded = false;
+  dmPanelMode = null;
+  dmFeatures?.closeSearchPanel?.();
+  dmFeatures?.closePinsPanel?.();
+  dmFeatures?.clearReply?.();
   $('chat-title').textContent = `# ${name}`;
   setMainView('chat');
   renderChannels();
@@ -1476,10 +1560,8 @@ function openTextChannel(channelId, name, push = true) {
     if (res.error) { toast(res.error); return; }
     if (activeChannelId !== channelId) return;
     writeMsgCache('chan', channelId, res.messages || [], res.hasMore);
-    if (chatHistoryExpanded) {
-      // Kullanıcı eski sayfaları açtıysa listeyi silme; hasMore'u sadece cache için tut
-      return;
-    }
+    dmPins = res.pins || [];
+    if (chatHistoryExpanded) return;
     chatHasMore = !!res.hasMore;
     renderMessageList($('chat-messages'), res.messages || [], resolveChannelMsg);
   });
@@ -1523,6 +1605,15 @@ $('chat-form').addEventListener('submit', (e) => {
   const text = input.value.trim();
   if (!text || !activeChannelId) return;
   input.value = '';
+  const replyTo = dmFeatures?.getReplyDraft?.() || dmReply;
+  const replyPayload = replyTo ? {
+    replyTo: {
+      id: replyTo.id,
+      fromId: replyTo.fromId,
+      text: replyTo.text,
+      username: replyTo.username,
+    },
+  } : {};
   const localId = localMsgId();
   const optimistic = {
     id: localId,
@@ -1530,9 +1621,12 @@ $('chat-form').addEventListener('submit', (e) => {
     username: currentUser?.username,
     text,
     ts: Date.now(),
+    replyTo: replyPayload.replyTo || null,
+    reactions: {},
   };
+  dmFeatures?.clearReply?.();
   appendOptimistic($('chat-messages'), optimistic, resolveChannelMsg);
-  socket.emit('send-message', { channelId: activeChannelId, text, clientId: localId }, (res) => {
+  socket.emit('send-message', { channelId: activeChannelId, text, clientId: localId, ...replyPayload }, (res) => {
     if (res?.error) {
       failOptimistic($('chat-messages'), localId);
       toast(res.error);
@@ -2987,33 +3081,25 @@ function connectSocket(token) {
     }
   });
 
+  socket.on('channel-pins-updated', ({ channelId, pins }) => {
+    if (channelId === activeChannelId) {
+      dmPins = pins || [];
+      if (dmPanelMode === 'pins') dmFeatures?.renderPins?.(dmPins);
+    }
+  });
+
   socket.on('dm-reaction', ({ channelId, messageId, reactions }) => {
     if (channelId !== activeDmChannelId || activeView !== 'dm') return;
     const el = document.querySelector(`[data-msg-id="${CSS.escape(messageId)}"]`);
     if (!el) return;
-    // Mesajı yeniden çizmek için channel geçmişini tazelemek yerine tepki satırını güncelle
-    const body = el.querySelector('.msg-body');
-    if (!body) return;
-    body.querySelector('.msg-reactions')?.remove();
-    const entries = Object.entries(reactions || {}).filter(([, users]) => users?.length);
-    if (!entries.length) return;
-    const wrap = document.createElement('div');
-    wrap.className = 'msg-reactions';
-    wrap.innerHTML = entries.map(([emoji, users]) => {
-      const mine = users.includes(currentUser?.id);
-      return `<button type="button" class="msg-reaction${mine ? ' mine' : ''}" data-emoji="${escapeHtml(emoji)}">${emoji} <span>${users.length}</span></button>`;
-    }).join('');
-    wrap.querySelectorAll('.msg-reaction').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        socket.emit('react-dm-message', {
-          channelId: activeDmChannelId,
-          messageId,
-          emoji: btn.dataset.emoji,
-        });
-      });
-    });
-    body.appendChild(wrap);
+    applyReactionsToEl(el, channelId, messageId, reactions, 'react-dm-message');
+  });
+
+  socket.on('channel-reaction', ({ channelId, messageId, reactions }) => {
+    if (channelId !== activeChannelId || activeView !== 'chat') return;
+    const el = document.querySelector(`[data-msg-id="${CSS.escape(messageId)}"]`);
+    if (!el) return;
+    applyReactionsToEl(el, channelId, messageId, reactions, 'react-channel-message');
   });
 
   socket.on('dm-call-update', ({ channelId, participants }) => {
@@ -3362,9 +3448,11 @@ function setupDeferredModules() {
     $, toast, escapeHtml, initials, formatTime, userChipHtml,
     getSocket: () => socket,
     getState: () => ({
-      friends, settings, activeDmFriendId, activeDmChannelId, activeGroupId, activeGroupTitle,
+      friends, settings, activeView, activeServer,
+      activeChannelId, activeDmFriendId, activeDmChannelId, activeGroupId, activeGroupTitle,
       dmProfileOpen, dmPins,
       activeDmFriendName: friends.find((f) => f.id === activeDmFriendId)?.username,
+      chatTitle: $('chat-title')?.textContent || '',
     }),
     setState: (patch) => {
       if ('dmProfileOpen' in patch) dmProfileOpen = patch.dmProfileOpen;
@@ -3387,6 +3475,7 @@ function setupDeferredModules() {
     showModal,
     closeModal,
     markReply: (draft) => { dmReply = draft; },
+    prependOlderForJump,
   });
 }
 
