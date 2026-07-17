@@ -233,3 +233,8 @@ create policy "profiles_update_own" on public.profiles
 
 create policy "social_own" on public.user_social
   for all to authenticated using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- API rolleri (PostgREST) — yoksa "permission denied for table"
+grant usage on schema public to anon, authenticated, service_role;
+grant all on all tables in schema public to anon, authenticated, service_role;
+grant all on all sequences in schema public to anon, authenticated, service_role;
