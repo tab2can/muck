@@ -1367,7 +1367,10 @@ $('dm-form').addEventListener('submit', (e) => {
   }
   input.value = '';
   dmFeatures?.clearReply?.();
-  socket.emit('send-dm', { friendId: activeDmFriendId, text, ...payload }, (res) => {
+  const dmPayload = activeDmChannelId
+    ? { channelId: activeDmChannelId, text, ...payload }
+    : { friendId: activeDmFriendId, text, ...payload };
+  socket.emit('send-dm', dmPayload, (res) => {
     if (res.error) { toast(res.error); return; }
     appendResolvedMessage($('dm-messages'), res.message, (m) => resolveDmMsg(m, activeDmFriendId));
   });
