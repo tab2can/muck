@@ -3410,13 +3410,9 @@ if ('serviceWorker' in navigator) {
   // /api/me turunu atla — socket auth + init tek seferde yeter
   connectSocket(token);
   setSplashStatus('Sunucuya bağlanılıyor…');
-  // Bağlantı takılırsa kullanıcıyı bilgilendir
   setTimeout(() => {
-    if ($('splash') && !$('splash').classList.contains('splash-hide') && !$('app')?.classList.contains('hidden') === false) {
-      /* app still hidden */
-    }
-    if ($('app')?.classList.contains('hidden') && !$('splash')?.classList.contains('hidden')) {
+    if ($('app')?.classList.contains('hidden') && !$('splash')?.classList.contains('splash-hide')) {
       setSplashStatus('Bağlantı bekleniyor…');
     }
-  }, 4000);
+  }, 4500);
 })();
