@@ -762,8 +762,8 @@ export async function markDmRecipientsUnread(channel, fromId) {
   );
 }
 
-export async function pushDmChannelMessage(channelId, fromId, text) {
-  const channel = await getDMChannelById(channelId);
+export async function pushDmChannelMessage(channelId, fromId, text, preloadedChannel = null) {
+  const channel = preloadedChannel || await getDMChannelById(channelId);
   if (!channel) return { error: 'Kanal bulunamadı.' };
   if (!channel.users.includes(fromId)) return { error: 'Yetkiniz yok.' };
   const { data, error } = await supabase
@@ -773,7 +773,6 @@ export async function pushDmChannelMessage(channelId, fromId, text) {
     .single();
   if (error) return { error: error.message };
   const ts = new Date(data.created_at).getTime();
-  // last_message güncellemesi emit'i bloklamasın
   supabase.from('dm_channels').update({
     last_message_at: data.created_at,
     last_from_id: fromId,
@@ -796,8 +795,8 @@ export async function pushDM(fromId, toId, text) {
   return pushDmChannelMessage(channel.id, fromId, text);
 }
 
-export async function setDmReply(channelId, fromId, text, replyTo) {
-  const channel = await getDMChannelById(channelId);
+export async function setDmReply(channelId, fromId, text, replyTo, preloadedChannel = null) {
+  const channel = preloadedChannel || await getDMChannelById(channelId);
   if (!channel) return { error: 'Kanal bulunamadı.' };
   if (!channel.users.includes(fromId)) return { error: 'Yetkiniz yok.' };
   const payload = replyTo ? {

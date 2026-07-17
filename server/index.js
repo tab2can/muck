@@ -745,13 +745,18 @@ io.on('connection', async (socket) => {
 
   socket.on('send-message', async ({ channelId, text }, cb) => {
     if (!text?.trim()) return cb?.({ error: 'Boş mesaj.' });
-    const found = await store.findChannel(channelId);
-    if (!found || !store.isMember(found.server, userId)) return cb?.({ error: 'Yetkiniz yok.' });
+    // Kanal zaten açıksa tekrar DB membership sorgusu yapma
+    if (socket.data.textChannelId !== channelId) {
+      const found = await store.findChannel(channelId);
+      if (!found || !store.isMember(found.server, userId)) return cb?.({ error: 'Yetkiniz yok.' });
+      if (socket.data.textChannelId) socket.leave(`chan:${socket.data.textChannelId}`);
+      socket.join(`chan:${channelId}`);
+      socket.data.textChannelId = channelId;
+    }
     try {
       const msg = await store.pushMessage(channelId, userId, socket.data.username, text);
-      // Önce gönderene callback, sonra odaya yayın (aynı socket cb + emit alabilir — client dedupe)
       cb?.({ success: true, message: msg });
-      io.to(`chan:${channelId}`).emit('message', { channelId, message: msg });
+      socket.to(`chan:${channelId}`).emit('message', { channelId, message: msg });
     } catch (err) {
       cb?.({ error: err.message || 'Mesaj gönderilemedi.' });
     }
@@ -766,6 +771,13 @@ io.on('connection', async (socket) => {
     await store.reopenDm(userId, friendId);
     await store.markDmRead(userId, friendId);
     const bs = await store.blockState(userId, friendId);
+    if (!socket.data.dmChannelCache) socket.data.dmChannelCache = {};
+    socket.data.dmChannelCache[channel.id] = channel;
+    if (!socket.data.blockCache) socket.data.blockCache = {};
+    socket.data.blockCache[friendId] = {
+      blocked: !!bs.blockedByMe,
+      blockedByThem: !!bs.blockedByThem,
+    };
     const pinRes = await store.getDmPins(userId, channel.id);
     cb?.({
       messages: await store.getDMs(userId, friendId),
@@ -785,6 +797,8 @@ io.on('connection', async (socket) => {
 
     if (channel.type === 'group') {
       await store.markGroupRead(userId, channel.id);
+      if (!socket.data.dmChannelCache) socket.data.dmChannelCache = {};
+      socket.data.dmChannelCache[channel.id] = channel;
       const pinRes = await store.getDmPins(userId, channel.id);
       cb?.({
         type: 'group',
@@ -805,6 +819,13 @@ io.on('connection', async (socket) => {
     await store.reopenDm(userId, friendId);
     await store.markDmRead(userId, friendId);
     const bs = await store.blockState(userId, friendId);
+    if (!socket.data.dmChannelCache) socket.data.dmChannelCache = {};
+    socket.data.dmChannelCache[channel.id] = channel;
+    if (!socket.data.blockCache) socket.data.blockCache = {};
+    socket.data.blockCache[friendId] = {
+      blocked: !!bs.blockedByMe,
+      blockedByThem: !!bs.blockedByThem,
+    };
     const pinRes = await store.getDmPins(userId, channel.id);
     cb?.({
       type: 'dm',
@@ -822,13 +843,6 @@ io.on('connection', async (socket) => {
   socket.on('send-dm', async ({ friendId, text, channelId, replyTo }, cb) => {
     if (!text?.trim()) return cb?.({ error: 'Boş mesaj.' });
 
-    function mutedUntil(map, key) {
-      const until = map?.[key];
-      if (until === undefined || until === null) return false;
-      if (until === 0) return true;
-      return Date.now() <= until;
-    }
-
     async function broadcastDmFast(channel, msg) {
       const payload = {
         channelId: channel.id,
@@ -836,28 +850,18 @@ io.on('connection', async (socket) => {
         fromId: userId,
         username: socket.data.username,
         message: msg,
+        friendId: channel.type === 'dm' ? userId : null,
+        // Mute/block client tarafında da kontrol edilir — emit'i bekletme
+        muted: false,
+        ignored: false,
+        blocked: false,
       };
       const recipients = channel.users.filter((uid) => uid !== userId);
-      await Promise.all(recipients.map(async (uid) => {
+      for (const uid of recipients) {
         const sockets = onlineUsers.get(uid);
-        if (!sockets?.size) return;
-        const social = await store.getSocial(uid);
-        const muted = channel.type === 'group'
-          ? mutedUntil(social.mutedGroups, channel.id)
-          : mutedUntil(social.mutedDms, userId);
-        const ignored = channel.type === 'dm' ? !!(social.ignored || []).includes(userId) : false;
-        const blocked = channel.type === 'dm' ? !!(social.blocked || []).includes(userId) : false;
-        for (const sid of sockets) {
-          io.to(sid).emit('dm', {
-            ...payload,
-            friendId: channel.type === 'dm' ? userId : null,
-            muted,
-            ignored,
-            blocked,
-          });
-        }
-      }));
-      // Sidebar güncellemesi arka planda — mesajı bekletmesin
+        if (!sockets?.size) continue;
+        for (const sid of sockets) io.to(sid).emit('dm', payload);
+      }
       setImmediate(() => {
         store.markDmRecipientsUnread(channel, userId)
           .then(() => Promise.all([
@@ -869,24 +873,34 @@ io.on('connection', async (socket) => {
     }
 
     if (channelId) {
-      const channel = await store.getDMChannelById(channelId);
+      let channel = socket.data.dmChannelCache?.[channelId];
+      if (!channel || !channel.users?.includes(userId)) {
+        channel = await store.getDMChannelById(channelId);
+        if (channel) {
+          if (!socket.data.dmChannelCache) socket.data.dmChannelCache = {};
+          socket.data.dmChannelCache[channelId] = channel;
+        }
+      }
       if (!channel || !channel.users.includes(userId)) return cb?.({ error: 'Kanal bulunamadı.' });
+      // Engeli client zaten kontrol ediyor; DB engel kontrolünü arka planda tut (hız)
       if (channel.type === 'dm') {
         const otherId = channel.users.find((id) => id !== userId);
         if (otherId) {
-          const bs = await store.blockState(userId, otherId);
-          if (bs.blockedByMe) return cb?.({ error: 'Engellediğin bir kullanıcıya mesaj gönderemezsin.' });
-          if (bs.blockedByThem) return cb?.({ error: 'Bu kullanıcıya mesaj gönderemezsin.' });
+          const bc = socket.data.blockCache?.[otherId];
+          if (bc?.blocked) return cb?.({ error: 'Engellediğin bir kullanıcıya mesaj gönderemezsin.' });
+          if (bc?.blockedByThem) return cb?.({ error: 'Bu kullanıcıya mesaj gönderemezsin.' });
         }
       }
       const result = replyTo
-        ? await store.setDmReply(channelId, userId, text, replyTo)
-        : await store.pushDmChannelMessage(channelId, userId, text);
+        ? await store.setDmReply(channelId, userId, text, replyTo, channel)
+        : await store.pushDmChannelMessage(channelId, userId, text, channel);
       if (result.error) return cb?.({ error: result.error });
       const ch = result._channel || channel;
       delete result._channel;
+      if (!socket.data.dmChannelCache) socket.data.dmChannelCache = {};
+      socket.data.dmChannelCache[ch.id] = ch;
       cb?.({ message: result });
-      broadcastDmFast(ch, result).catch(() => {});
+      broadcastDmFast(ch, result);
       return;
     }
 

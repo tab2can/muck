@@ -992,6 +992,8 @@ function makeMsgEl(author, text, ts, msgId = null, extra = {}) {
   const div = document.createElement('div');
   div.className = 'msg';
   if (msgId) div.dataset.msgId = msgId;
+  if (extra.pending) div.dataset.pending = '1';
+  if (extra.localId) div.dataset.localId = extra.localId;
   const reply = extra.replyTo;
   const reactions = extra.reactions || {};
   let replyHtml = '';
@@ -1015,7 +1017,7 @@ function makeMsgEl(author, text, ts, msgId = null, extra = {}) {
       <div class="msg-text">${escapeHtml(text)}</div>
       ${reactHtml}
     </div>`;
-  if (msgId && activeView === 'dm' && activeDmChannelId) {
+  if (msgId && !extra.pending && activeView === 'dm' && activeDmChannelId) {
     div.dataset.allowMenu = '1';
     div.addEventListener('contextmenu', (e) => {
       e.preventDefault();
@@ -1096,6 +1098,9 @@ function appendResolvedMessage(container, msg, resolve) {
   if (msg?.id && container.querySelector(`[data-msg-id="${CSS.escape(String(msg.id))}"]`)) {
     return;
   }
+  // Optimistic pending mesajı sessizce gerçek id ile bağla (yeniden çizme)
+  if (msg?.id && confirmPendingMessage(container, msg, resolve)) return;
+
   const meta = resolve(msg);
   if (isAuthorBlocked(meta.authorId)) {
     const last = container.lastElementChild;
@@ -1108,6 +1113,75 @@ function appendResolvedMessage(container, msg, resolve) {
     container.appendChild(makeMsgEl(meta.author, meta.text, meta.ts, meta.id, meta));
   }
   container.scrollTop = container.scrollHeight;
+}
+
+function localMsgId() {
+  return `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** Pending balonu gerçek mesajla eşleştir — DOM’u bozmadan id güncelle */
+function confirmPendingMessage(container, realMsg, resolve) {
+  const meta = resolve(realMsg);
+  const text = String(meta.text || '').trim();
+  const authorId = meta.authorId;
+  const pending = [...container.querySelectorAll('.msg[data-pending="1"]')];
+  const match = pending.find((el) => {
+    const t = el.querySelector('.msg-text')?.textContent || '';
+    if (t.trim() !== text) return false;
+    const from = el.dataset.fromId || '';
+    if (authorId && from && from !== String(authorId)) return false;
+    const ts = Number(el.dataset.ts || 0);
+    return !ts || Date.now() - ts < 30000;
+  }); // ilk eşleşen = en eski pending (FIFO)
+  if (!match) return false;
+  match.dataset.msgId = String(realMsg.id);
+  match.dataset.pending = '0';
+  delete match.dataset.pending;
+  match.classList.remove('msg-pending');
+  if (meta.ts) {
+    match.dataset.ts = String(meta.ts);
+    const timeEl = match.querySelector('.msg-time');
+    if (timeEl) timeEl.textContent = formatTime(meta.ts);
+  }
+  // Menü bağla (DM)
+  if (activeView === 'dm' && activeDmChannelId && !match.dataset.allowMenu) {
+    match.dataset.allowMenu = '1';
+    const author = match.querySelector('.msg-author')?.textContent || '';
+    const bodyText = match.querySelector('.msg-text')?.textContent || '';
+    match.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dmFeatures?.openMessageMenu?.(e.clientX, e.clientY, {
+        id: realMsg.id,
+        text: bodyText,
+        fromId: authorId,
+        ts: meta.ts,
+        username: author,
+        author,
+      }, activeDmChannelId);
+    });
+  }
+  return true;
+}
+
+function appendOptimistic(container, msg, resolve) {
+  const meta = resolve(msg);
+  const el = makeMsgEl(meta.author, meta.text, meta.ts, msg.id, {
+    ...meta,
+    pending: true,
+    localId: msg.id,
+  });
+  el.dataset.fromId = String(meta.authorId || '');
+  el.dataset.ts = String(meta.ts || Date.now());
+  el.classList.add('msg-pending');
+  container.appendChild(el);
+  container.scrollTop = container.scrollHeight;
+  return el;
+}
+
+function failOptimistic(container, localId) {
+  const el = container.querySelector(`[data-local-id="${CSS.escape(localId)}"]`);
+  el?.remove();
 }
 
 function renderMessageList(container, messages, resolve) {
@@ -1220,8 +1294,21 @@ $('chat-form').addEventListener('submit', (e) => {
   const text = input.value.trim();
   if (!text || !activeChannelId) return;
   input.value = '';
-  socket.emit('send-message', { channelId: activeChannelId, text }, (res) => {
-    if (res?.error) { toast(res.error); return; }
+  const localId = localMsgId();
+  const optimistic = {
+    id: localId,
+    userId: currentUser?.id,
+    username: currentUser?.username,
+    text,
+    ts: Date.now(),
+  };
+  appendOptimistic($('chat-messages'), optimistic, resolveChannelMsg);
+  socket.emit('send-message', { channelId: activeChannelId, text, clientId: localId }, (res) => {
+    if (res?.error) {
+      failOptimistic($('chat-messages'), localId);
+      toast(res.error);
+      return;
+    }
     if (res?.message) appendMessage($('chat-messages'), res.message);
   });
 });
@@ -1350,12 +1437,28 @@ $('dm-form').addEventListener('submit', (e) => {
       username: replyTo.username,
     },
   } : {};
+  const localId = localMsgId();
+  const optimistic = {
+    id: localId,
+    fromId: currentUser?.id,
+    text,
+    ts: Date.now(),
+    replyTo: payload.replyTo || null,
+    reactions: {},
+  };
+  const resolve = (m) => resolveDmMsg(m, activeGroupId ? null : activeDmFriendId);
+
   if (activeGroupId) {
     input.value = '';
     dmFeatures?.clearReply?.();
-    socket.emit('send-dm', { channelId: activeGroupId, text, ...payload }, (res) => {
-      if (res.error) { toast(res.error); return; }
-      appendResolvedMessage($('dm-messages'), res.message, (m) => resolveDmMsg(m, null));
+    appendOptimistic($('dm-messages'), optimistic, resolve);
+    socket.emit('send-dm', { channelId: activeGroupId, text, clientId: localId, ...payload }, (res) => {
+      if (res.error) {
+        failOptimistic($('dm-messages'), localId);
+        toast(res.error);
+        return;
+      }
+      if (res.message) appendResolvedMessage($('dm-messages'), res.message, resolve);
     });
     return;
   }
@@ -1367,12 +1470,17 @@ $('dm-form').addEventListener('submit', (e) => {
   }
   input.value = '';
   dmFeatures?.clearReply?.();
+  appendOptimistic($('dm-messages'), optimistic, resolve);
   const dmPayload = activeDmChannelId
-    ? { channelId: activeDmChannelId, text, ...payload }
-    : { friendId: activeDmFriendId, text, ...payload };
+    ? { channelId: activeDmChannelId, text, clientId: localId, ...payload }
+    : { friendId: activeDmFriendId, text, clientId: localId, ...payload };
   socket.emit('send-dm', dmPayload, (res) => {
-    if (res.error) { toast(res.error); return; }
-    appendResolvedMessage($('dm-messages'), res.message, (m) => resolveDmMsg(m, activeDmFriendId));
+    if (res.error) {
+      failOptimistic($('dm-messages'), localId);
+      toast(res.error);
+      return;
+    }
+    if (res.message) appendResolvedMessage($('dm-messages'), res.message, resolve);
   });
 });
 
@@ -2545,8 +2653,26 @@ function connectSocket(token) {
         if (isGroupView) socket.emit('group-dm-read', { channelId });
         else socket.emit('dm-read', { friendId });
       }
-    } else if (!muted && !ignored && !blocked) {
-      toast(`${username}: yeni mesaj`);
+    } else {
+      const localMuted = type === 'group'
+        ? (() => {
+          const until = social.mutedGroups?.[channelId];
+          if (until === undefined || until === null) return false;
+          if (until === 0) return true;
+          return Date.now() <= until;
+        })()
+        : (() => {
+          const until = social.mutedDms?.[friendId];
+          if (until === undefined || until === null) return false;
+          if (until === 0) return true;
+          return Date.now() <= until;
+        })();
+      const localIgnored = !!(social.ignored || []).includes(friendId);
+      const localBlocked = !!(social.blocked || []).includes(friendId)
+        || !!friends.find((f) => f.id === friendId)?.blocked;
+      if (!muted && !ignored && !blocked && !localMuted && !localIgnored && !localBlocked) {
+        toast(`${username}: yeni mesaj`);
+      }
     }
   });
 
