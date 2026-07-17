@@ -8,7 +8,9 @@
     "start": "node server/index.js"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.110.7",
     "cookie-parser": "^1.4.7",
+    "dotenv": "^17.4.2",
     "express": "^4.21.2",
     "socket.io": "^4.8.1"
   }

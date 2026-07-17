@@ -161,8 +161,11 @@ function closeModal() { $('modal-overlay').classList.add('hidden'); }
 $('modal-overlay').addEventListener('click', (e) => { if (e.target === $('modal-overlay')) closeModal(); });
 
 /* ================= Views ================= */
-function showApp() { $('auth-view').classList.add('hidden'); $('app').classList.remove('hidden'); }
-function showAuth() { $('auth-view').classList.remove('hidden'); $('app').classList.add('hidden'); }
+function showApp() { $('auth-view')?.classList.add('hidden'); $('app')?.classList.remove('hidden'); }
+function showAuth() { location.href = '/login'; }
+function accessToken() {
+  return getCookie('muck_access') || getCookie('muck_token') || getCookie('streamuck_token');
+}
 
 function setMainView(view) {
   activeView = view;
@@ -1898,48 +1901,17 @@ $('friends-add-form')?.addEventListener('submit', (e) => {
 });
 
 /* ================= Auth ================= */
-const authTabs = document.querySelectorAll('.tab');
-let authMode = 'login';
-authTabs.forEach((tab) => {
-  tab.addEventListener('click', () => {
-    authTabs.forEach((t) => t.classList.remove('active'));
-    tab.classList.add('active');
-    authMode = tab.dataset.tab;
-    $('auth-tabs').dataset.active = authMode;
-    $('auth-submit').textContent = authMode === 'login' ? 'Giriş Yap' : 'Kayıt Ol';
-    $('auth-error').classList.add('hidden');
-  });
-});
-
-$('auth-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  $('auth-error').classList.add('hidden');
-  const username = $('auth-username').value.trim();
-  const password = $('auth-password').value;
-  $('auth-submit').disabled = true;
-  try {
-    const res = await fetch(`/api/${authMode}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
-    });
-    const data = await res.json();
-    if (!res.ok) { $('auth-error').textContent = data.error; $('auth-error').classList.remove('hidden'); return; }
-    setCookie('muck_token', data.token);
-    currentUser = data.user;
-    connectSocket(data.token);
-  } catch { $('auth-error').textContent = 'Sunucuya ulaşılamadı.'; $('auth-error').classList.remove('hidden'); }
-  finally { $('auth-submit').disabled = false; }
-});
-
-$('btn-logout').addEventListener('click', doLogout);
+$('btn-logout')?.addEventListener('click', doLogout);
 function doLogout() {
   voiceManager?.leave();
   closeSettings();
-  fetch('/api/logout', { method: 'POST' }).catch(() => {});
+  fetch('/api/logout', { method: 'POST', credentials: 'same-origin' }).catch(() => {});
+  deleteCookie('muck_access');
+  deleteCookie('muck_refresh');
   deleteCookie('muck_token');
   socket?.disconnect();
   currentUser = null;
-  showAuth();
+  location.href = '/login';
 }
 
 /* ================= DM context menu + profil popup ================= */
@@ -2490,7 +2462,11 @@ function connectSocket(token) {
   });
 
   socket.on('connect_error', (err) => {
-    if (err.message === 'unauthorized') { deleteCookie('muck_token'); showAuth(); }
+    if (err.message === 'unauthorized') {
+      deleteCookie('muck_access');
+      deleteCookie('muck_token');
+      showAuth();
+    }
   });
 
   socket.on('init', ({ user, friends: fr, friendRequests: frReq, servers: srv, social: soc, friendsVoice: fv, groupDms: gd }) => {
@@ -2986,12 +2962,12 @@ if ('serviceWorker' in navigator) {
 (async function boot() {
   loadSettings();
   applySettings();
-  const token = getCookie('muck_token') || getCookie('streamuck_token');
+  const token = accessToken();
   if (!token) { $('splash').classList.add('hidden'); showAuth(); return; }
   try {
-    const res = await fetch('/api/me');
+    const res = await fetch('/api/me', { credentials: 'same-origin', headers: { Authorization: `Bearer ${token}` } });
     if (res.ok) { const { user } = await res.json(); currentUser = user; connectSocket(token); }
-    else { deleteCookie('muck_token'); showAuth(); }
+    else { deleteCookie('muck_access'); deleteCookie('muck_token'); showAuth(); }
   } catch { showAuth(); }
   finally { $('splash').classList.add('hidden'); }
 })();

@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="tr" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Giriş Yap — Muck</title>
+  <meta name="theme-color" content="#0f1117" />
+  <link rel="icon" href="/icons/icon-192.png" />
+  <link rel="stylesheet" href="/auth.css" />
+</head>
+<body class="auth-page">
+  <div class="auth-bg" aria-hidden="true"></div>
+  <main class="auth-card">
+    <h1>Tekrar hoş geldin!</h1>
+    <p class="auth-sub">Seni tekrar gördüğümüze çok sevindik!</p>
+    <form id="login-form" novalidate>
+      <label class="field">
+        <span class="field-label">E-posta <em>*</em></span>
+        <input id="email" type="email" autocomplete="email" required maxlength="254" />
+      </label>
+      <label class="field">
+        <span class="field-label">Şifre <em>*</em></span>
+        <input id="password" type="password" autocomplete="current-password" required maxlength="100" />
+      </label>
+      <a class="auth-link" href="/forgot-password">Şifreni mi unuttun?</a>
+      <p class="auth-error hidden" id="error" role="alert"></p>
+      <button type="submit" class="auth-btn" id="submit">Giriş Yap</button>
+    </form>
+    <p class="auth-foot">Bir hesaba mı ihtiyacın var? <a href="/register">Kaydol</a></p>
+  </main>
+  <script type="module" src="/auth-login.js"></script>
+</body>
+</html>
