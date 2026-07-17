@@ -1093,6 +1093,9 @@ function pushIntoBlockedGroup(group, msg, resolve) {
 }
 
 function appendResolvedMessage(container, msg, resolve) {
+  if (msg?.id && container.querySelector(`[data-msg-id="${CSS.escape(String(msg.id))}"]`)) {
+    return;
+  }
   const meta = resolve(msg);
   if (isAuthorBlocked(meta.authorId)) {
     const last = container.lastElementChild;
@@ -1217,7 +1220,10 @@ $('chat-form').addEventListener('submit', (e) => {
   const text = input.value.trim();
   if (!text || !activeChannelId) return;
   input.value = '';
-  socket.emit('send-message', { channelId: activeChannelId, text });
+  socket.emit('send-message', { channelId: activeChannelId, text }, (res) => {
+    if (res?.error) { toast(res.error); return; }
+    if (res?.message) appendMessage($('chat-messages'), res.message);
+  });
 });
 
 /* ================= DM ================= */
@@ -2499,12 +2505,6 @@ function connectSocket(token) {
       updateDmComposer();
     }
     if (activeView === 'dm' && activeGroupId) updatePanel();
-    if (activeView === 'chat' && activeChannelId) {
-      socket.emit('open-text-channel', { channelId: activeChannelId }, (res) => {
-        if (res?.error) return;
-        renderMessageList($('chat-messages'), res.messages || [], resolveChannelMsg);
-      });
-    }
   });
 
   socket.on('friend-update', (f) => {

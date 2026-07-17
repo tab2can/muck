@@ -747,9 +747,14 @@ io.on('connection', async (socket) => {
     if (!text?.trim()) return cb?.({ error: 'Boş mesaj.' });
     const found = await store.findChannel(channelId);
     if (!found || !store.isMember(found.server, userId)) return cb?.({ error: 'Yetkiniz yok.' });
-    const msg = await store.pushMessage(channelId, userId, socket.data.username, text);
-    io.to(`chan:${channelId}`).emit('message', { channelId, message: msg });
-    cb?.({ success: true });
+    try {
+      const msg = await store.pushMessage(channelId, userId, socket.data.username, text);
+      // Önce gönderene callback, sonra odaya yayın (aynı socket cb + emit alabilir — client dedupe)
+      cb?.({ success: true, message: msg });
+      io.to(`chan:${channelId}`).emit('message', { channelId, message: msg });
+    } catch (err) {
+      cb?.({ error: err.message || 'Mesaj gönderilemedi.' });
+    }
   });
 
   // ---- DMs ----
@@ -817,7 +822,14 @@ io.on('connection', async (socket) => {
   socket.on('send-dm', async ({ friendId, text, channelId, replyTo }, cb) => {
     if (!text?.trim()) return cb?.({ error: 'Boş mesaj.' });
 
-    async function broadcastDm(channel, msg) {
+    function mutedUntil(map, key) {
+      const until = map?.[key];
+      if (until === undefined || until === null) return false;
+      if (until === 0) return true;
+      return Date.now() <= until;
+    }
+
+    async function broadcastDmFast(channel, msg) {
       const payload = {
         channelId: channel.id,
         type: channel.type,
@@ -825,16 +837,16 @@ io.on('connection', async (socket) => {
         username: socket.data.username,
         message: msg,
       };
-      for (const uid of channel.users) {
-        if (uid === userId) continue;
+      const recipients = channel.users.filter((uid) => uid !== userId);
+      await Promise.all(recipients.map(async (uid) => {
         const sockets = onlineUsers.get(uid);
-        if (!sockets) continue;
+        if (!sockets?.size) return;
         const social = await store.getSocial(uid);
         const muted = channel.type === 'group'
-          ? await store.isGroupMuted(uid, channel.id)
-          : await store.isDmMuted(uid, userId);
+          ? mutedUntil(social.mutedGroups, channel.id)
+          : mutedUntil(social.mutedDms, userId);
         const ignored = channel.type === 'dm' ? !!(social.ignored || []).includes(userId) : false;
-        const blocked = channel.type === 'dm' ? await store.isBlockedBy(uid, userId) : false;
+        const blocked = channel.type === 'dm' ? !!(social.blocked || []).includes(userId) : false;
         for (const sid of sockets) {
           io.to(sid).emit('dm', {
             ...payload,
@@ -844,8 +856,16 @@ io.on('connection', async (socket) => {
             blocked,
           });
         }
-        await emitSocial(uid);
-      }
+      }));
+      // Sidebar güncellemesi arka planda — mesajı bekletmesin
+      setImmediate(() => {
+        store.markDmRecipientsUnread(channel, userId)
+          .then(() => Promise.all([
+            ...recipients.map((uid) => emitSocial(uid).catch(() => {})),
+            emitSocial(userId).catch(() => {}),
+          ]))
+          .catch(() => {});
+      });
     }
 
     if (channelId) {
@@ -855,9 +875,10 @@ io.on('connection', async (socket) => {
         ? await store.setDmReply(channelId, userId, text, replyTo)
         : await store.pushDmChannelMessage(channelId, userId, text);
       if (result.error) return cb?.({ error: result.error });
-      await broadcastDm(channel, result);
-      cb?.({ message: result, channel: await store.publicDmChannel(channel, userId) });
-      await emitSocial(userId);
+      const ch = result._channel || channel;
+      delete result._channel;
+      cb?.({ message: result });
+      broadcastDmFast(ch, result).catch(() => {});
       return;
     }
 
@@ -871,9 +892,10 @@ io.on('connection', async (socket) => {
       ? await store.setDmReply(channel.id, userId, text, replyTo)
       : await store.pushDM(userId, friendId, text);
     if (result.error) return cb?.({ error: result.error });
-    await broadcastDm(channel, result);
+    const ch = result._channel || channel;
+    delete result._channel;
     cb?.({ message: result });
-    await emitSocial(userId);
+    broadcastDmFast(ch, result).catch(() => {});
   });
 
   socket.on('create-group-dm', async ({ memberIds, name }, cb) => {

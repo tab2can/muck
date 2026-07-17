@@ -1,4 +1,4 @@
-const CACHE = 'muck-v21';
+const CACHE = 'muck-v22';
 const PRECACHE = [
   '/',
   '/index.html',

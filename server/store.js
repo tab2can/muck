@@ -102,10 +102,17 @@ export async function findByUsername(username) {
   return profileToUser(data);
 }
 
+const profileCache = new Map(); // id -> { user, expires }
+const PROFILE_TTL_MS = 60_000;
+
 export async function findById(id) {
   if (!id) return null;
+  const hit = profileCache.get(id);
+  if (hit && hit.expires > Date.now()) return hit.user;
   const { data } = await supabase.from('profiles').select('*').eq('id', id).maybeSingle();
-  return profileToUser(data);
+  const user = profileToUser(data);
+  if (user) profileCache.set(id, { user, expires: Date.now() + PROFILE_TTL_MS });
+  return user;
 }
 
 export async function findByEmail(email) {
@@ -619,14 +626,7 @@ export async function getServerMembers(serverId) {
 }
 
 // ---- Messages ----
-export async function pushMessage(channelId, userId, username, text) {
-  const { data, error } = await supabase
-    .from('messages')
-    .insert({ channel_id: channelId, author_id: userId, content: text.trim() })
-    .select('*')
-    .single();
-  if (error) throw new Error(error.message);
-  // trim old
+async function trimOldChannelMessages(channelId) {
   const { data: old } = await supabase
     .from('messages')
     .select('id')
@@ -636,6 +636,17 @@ export async function pushMessage(channelId, userId, username, text) {
   if (old?.length) {
     await supabase.from('messages').delete().in('id', old.map((m) => m.id));
   }
+}
+
+export async function pushMessage(channelId, userId, username, text) {
+  const { data, error } = await supabase
+    .from('messages')
+    .insert({ channel_id: channelId, author_id: userId, content: text.trim() })
+    .select('*')
+    .single();
+  if (error) throw new Error(error.message);
+  // Trim arka planda — emit'i geciktirmesin
+  trimOldChannelMessages(channelId).catch(() => {});
   return {
     id: data.id,
     userId: data.author_id,
@@ -654,19 +665,17 @@ export async function getMessages(channelId, limit = 50) {
     .order('created_at', { ascending: false })
     .limit(limit);
   const rows = (data || []).reverse();
-  const out = [];
-  for (const m of rows) {
-    const u = await findById(m.author_id);
-    out.push({
-      id: m.id,
-      userId: m.author_id,
-      username: u?.username || '—',
-      text: m.content,
-      ts: new Date(m.created_at).getTime(),
-      mediaUrls: m.media_urls || [],
-    });
-  }
-  return out;
+  const authorIds = [...new Set(rows.map((m) => m.author_id))];
+  const authors = await Promise.all(authorIds.map((id) => findById(id)));
+  const byId = new Map(authors.filter(Boolean).map((u) => [u.id, u]));
+  return rows.map((m) => ({
+    id: m.id,
+    userId: m.author_id,
+    username: byId.get(m.author_id)?.username || '—',
+    text: m.content,
+    ts: new Date(m.created_at).getTime(),
+    mediaUrls: m.media_urls || [],
+  }));
 }
 
 // ---- DMs ----
@@ -733,6 +742,26 @@ export async function getOrCreateDMChannel(a, b) {
   return getDMChannelById(id);
 }
 
+/** Okunmamış işaretleme — mesaj emit'inden sonra arka planda */
+export async function markDmRecipientsUnread(channel, fromId) {
+  if (!channel?.users?.length) return;
+  await Promise.all(
+    channel.users
+      .filter((uid) => uid !== fromId)
+      .map(async (uid) => {
+        const s = await getSocial(uid);
+        if (channel.type === 'group') {
+          s.unreadGroups[channel.id] = true;
+          s.closedGroups = s.closedGroups.filter((id) => id !== channel.id);
+        } else {
+          s.unreadDms[fromId] = true;
+          s.closedDms = s.closedDms.filter((id) => id !== fromId);
+        }
+        await saveSocial(uid, s);
+      })
+  );
+}
+
 export async function pushDmChannelMessage(channelId, fromId, text) {
   const channel = await getDMChannelById(channelId);
   if (!channel) return { error: 'Kanal bulunamadı.' };
@@ -744,23 +773,11 @@ export async function pushDmChannelMessage(channelId, fromId, text) {
     .single();
   if (error) return { error: error.message };
   const ts = new Date(data.created_at).getTime();
-  await supabase.from('dm_channels').update({
+  // last_message güncellemesi emit'i bloklamasın
+  supabase.from('dm_channels').update({
     last_message_at: data.created_at,
     last_from_id: fromId,
-  }).eq('id', channelId);
-
-  for (const uid of channel.users) {
-    if (uid === fromId) continue;
-    const s = await getSocial(uid);
-    if (channel.type === 'group') {
-      s.unreadGroups[channelId] = true;
-      s.closedGroups = s.closedGroups.filter((id) => id !== channelId);
-    } else {
-      s.unreadDms[fromId] = true;
-      s.closedDms = s.closedDms.filter((id) => id !== fromId);
-    }
-    await saveSocial(uid, s);
-  }
+  }).eq('id', channelId).then(() => {}).catch(() => {});
 
   return {
     id: data.id,
@@ -770,6 +787,7 @@ export async function pushDmChannelMessage(channelId, fromId, text) {
     reactions: data.reactions || {},
     replyTo: data.reply_to || null,
     mediaUrls: data.media_urls || [],
+    _channel: channel,
   };
 }
 
@@ -799,10 +817,10 @@ export async function setDmReply(channelId, fromId, text, replyTo) {
     .select('*')
     .single();
   if (error) return { error: error.message };
-  await supabase.from('dm_channels').update({
+  supabase.from('dm_channels').update({
     last_message_at: data.created_at,
     last_from_id: fromId,
-  }).eq('id', channelId);
+  }).eq('id', channelId).then(() => {}).catch(() => {});
   return {
     id: data.id,
     fromId: data.author_id,
@@ -811,6 +829,7 @@ export async function setDmReply(channelId, fromId, text, replyTo) {
     reactions: {},
     replyTo: data.reply_to,
     mediaUrls: [],
+    _channel: channel,
   };
 }
 
