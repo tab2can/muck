@@ -871,6 +871,14 @@ io.on('connection', async (socket) => {
     if (channelId) {
       const channel = await store.getDMChannelById(channelId);
       if (!channel || !channel.users.includes(userId)) return cb?.({ error: 'Kanal bulunamadı.' });
+      if (channel.type === 'dm') {
+        const otherId = channel.users.find((id) => id !== userId);
+        if (otherId) {
+          const bs = await store.blockState(userId, otherId);
+          if (bs.blockedByMe) return cb?.({ error: 'Engellediğin bir kullanıcıya mesaj gönderemezsin.' });
+          if (bs.blockedByThem) return cb?.({ error: 'Bu kullanıcıya mesaj gönderemezsin.' });
+        }
+      }
       const result = replyTo
         ? await store.setDmReply(channelId, userId, text, replyTo)
         : await store.pushDmChannelMessage(channelId, userId, text);
