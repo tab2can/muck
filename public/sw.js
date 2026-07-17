@@ -1,7 +1,9 @@
-const CACHE = 'muck-v20';
+const CACHE = 'muck-v21';
 const PRECACHE = [
   '/',
   '/index.html',
+  '/login.html',
+  '/register.html',
   '/offline.html',
   '/manifest.webmanifest',
   '/icon.png',
@@ -9,10 +11,14 @@ const PRECACHE = [
   '/icons/icon-512.png',
   '/icons/maskable-512.png',
   '/style.css',
+  '/auth.css',
   '/dm-features.css',
   '/app.js',
   '/voice.js',
   '/dm-features.js',
+  '/auth-login.js',
+  '/auth-register.js',
+  '/auth-common.js',
 ];
 
 async function precache() {
