@@ -439,9 +439,53 @@ export async function inviteToServer(inviterId, serverId, targetUserId) {
   if (!server || !isMember(server, inviterId)) return { error: 'Yetkiniz yok.' };
   const target = await findById(targetUserId);
   if (!target) return { error: 'Kullanıcı bulunamadı.' };
-  if (isMember(server, targetUserId)) return { server: await publicServerAsync(serverId) };
-  await supabase.from('server_members').insert({ server_id: serverId, user_id: targetUserId });
-  return { server: await publicServerAsync(serverId) };
+  const inviter = await findById(inviterId);
+  if (!inviter) return { error: 'Oturum geçersiz.' };
+
+  const channel = await getOrCreateDMChannel(inviterId, targetUserId);
+  const alreadyMember = isMember(server, targetUserId);
+  const metadata = {
+    type: 'server_invite',
+    serverId: server.id,
+    serverName: server.name,
+    inviteCode: server.inviteCode,
+    memberCount: server.members.length,
+    inviterId,
+    inviterName: inviter.username,
+  };
+  const { data, error } = await supabase
+    .from('dm_messages')
+    .insert({
+      channel_id: channel.id,
+      author_id: inviterId,
+      content: `${server.name} sunucusuna davet`,
+      metadata,
+    })
+    .select('*')
+    .single();
+  if (error) return { error: error.message };
+
+  supabase.from('dm_channels').update({
+    last_message_at: data.created_at,
+    last_from_id: inviterId,
+  }).eq('id', channel.id).then(() => {}).catch(() => {});
+
+  const message = {
+    id: data.id,
+    fromId: data.author_id,
+    text: data.content,
+    ts: new Date(data.created_at).getTime(),
+    reactions: data.reactions || {},
+    replyTo: data.reply_to || null,
+    mediaUrls: data.media_urls || [],
+    metadata: data.metadata || metadata,
+  };
+  return {
+    server: await publicServerAsync(serverId),
+    channel,
+    message,
+    alreadyMember,
+  };
 }
 
 // ---- Servers ----
@@ -716,6 +760,7 @@ async function enrichSearchRows(rows) {
     reactions: m.reactions || {},
     replyTo: m.reply_to || null,
     edited: !!m.edited_at,
+    metadata: m.metadata || null,
   }));
 }
 
@@ -908,6 +953,7 @@ export async function pushDmChannelMessage(channelId, fromId, text, preloadedCha
     reactions: data.reactions || {},
     replyTo: data.reply_to || null,
     mediaUrls: data.media_urls || [],
+    metadata: data.metadata || null,
     _channel: channel,
   };
 }
@@ -976,6 +1022,7 @@ export async function getDmChannelMessages(channelId, { limit = PAGE_SIZE, befor
       replyTo: m.reply_to || null,
       mediaUrls: m.media_urls || [],
       edited: !!m.edited_at,
+      metadata: m.metadata || null,
     })),
     hasMore,
   };

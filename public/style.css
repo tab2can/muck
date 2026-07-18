@@ -627,6 +627,48 @@ html[data-theme="light"] .voice-conn { background: #e8ebf2; }
   border: 0; background: none; padding: 0; cursor: pointer;
   color: var(--accent); font-size: .7rem; text-decoration: underline;
 }
+
+/* DM sunucu daveti */
+.server-invite-card {
+  width: min(360px, 100%);
+  margin-top: .45rem;
+  padding: .85rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 5px 16px rgba(0,0,0,.2);
+}
+.server-invite-kicker {
+  margin-bottom: .7rem;
+  color: var(--muted);
+  font-size: .67rem;
+  font-weight: 800;
+  letter-spacing: .045em;
+}
+.server-invite-main { display: flex; align-items: center; gap: .7rem; }
+.server-invite-icon {
+  width: 48px; height: 48px; flex: 0 0 auto;
+  display: grid; place-items: center;
+  border-radius: 14px;
+  background: linear-gradient(145deg, var(--accent), var(--accent-2));
+  color: #fff; font-weight: 850;
+}
+.server-invite-info { min-width: 0; display: flex; flex-direction: column; gap: .2rem; }
+.server-invite-info strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.server-invite-info > span { color: var(--muted); font-size: .78rem; }
+.server-invite-online {
+  display: inline-block; width: 7px; height: 7px;
+  margin-right: .3rem; border-radius: 50%; background: var(--online);
+}
+.server-invite-action {
+  width: 100%; margin-top: .75rem; padding: .55rem .75rem;
+  border: 0; border-radius: 7px;
+  background: #23a559; color: #fff;
+  font-weight: 750; cursor: pointer;
+}
+.server-invite-action:hover { filter: brightness(1.08); }
+.server-invite-action:disabled { opacity: .65; cursor: wait; }
+.server-invite-action.joined { background: var(--accent); }
 .chat-input { display: flex; gap: .5rem; padding: .75rem 1rem; border-top: 1px solid var(--border); flex: 0 0 auto; }
 .chat-input input { flex: 1; }
 

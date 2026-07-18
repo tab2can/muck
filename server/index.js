@@ -1190,19 +1190,38 @@ io.on('connection', async (socket) => {
   socket.on('invite-to-server', async ({ serverId, targetId }, cb) => {
     const result = await store.inviteToServer(userId, serverId, targetId);
     if (result.error) return cb?.({ error: result.error });
-    cb?.({ server: result.server });
-    const server = await store.getServer(serverId);
-    for (const memberId of server.members) {
-      const sockets = onlineUsers.get(memberId);
-      if (sockets) for (const sid of sockets) io.to(sid).emit('server-updated', { server: result.server });
+    const { channel, message, server, alreadyMember } = result;
+    cb?.({ server, channelId: channel.id, message, alreadyMember });
+
+    const payload = {
+      channelId: channel.id,
+      type: 'dm',
+      fromId: userId,
+      username: socket.data.username,
+      message,
+      friendId: userId,
+      muted: false,
+      ignored: false,
+      blocked: false,
+    };
+    socket.emit('dm-invite-sent', {
+      channelId: channel.id,
+      targetId,
+      message,
+    });
+    for (const uid of channel.users) {
+      if (uid === userId) continue;
+      const sockets = onlineUsers.get(uid);
+      if (sockets) for (const sid of sockets) io.to(sid).emit('dm', payload);
     }
-    // Hedefe sunucu listesi güncellemesi
-    const ts = onlineUsers.get(targetId);
-    if (ts) {
-      for (const sid of ts) {
-        io.to(sid).emit('server-invited', { server: result.server });
-      }
-    }
+    setImmediate(() => {
+      store.markDmRecipientsUnread(channel, userId)
+        .then(() => Promise.all([
+          emitSocial(targetId).catch(() => {}),
+          emitSocial(userId).catch(() => {}),
+        ]))
+        .catch(() => {});
+    });
   });
 
   // ---- DM araması (zil + mesh, kanal = dmChannelId) ----

@@ -270,6 +270,7 @@ function setMainView(view) {
 
   $('btn-friends-nav')?.classList.toggle('active', view === 'friends' && !activeDmFriendId && !activeGroupId);
   updatePanel();
+  if (dmIncoming) syncIncomingDmCallUi();
 }
 
 /* ================= Right panel (üyeler / profil / şimdi aktif) ================= */
@@ -1135,6 +1136,60 @@ function isAuthorBlocked(authorId) {
   return !!f?.blocked;
 }
 
+function serverInviteCardHtml(invite) {
+  const joined = servers.some((s) => String(s.id) === String(invite.serverId));
+  const action = joined ? 'Sunucuya Git' : 'Katıl';
+  return `
+    <div class="server-invite-card" data-server-id="${escapeHtml(invite.serverId || '')}">
+      <div class="server-invite-kicker">SENİ BİR SUNUCUYA DAVET ETTİ</div>
+      <div class="server-invite-main">
+        <span class="server-invite-icon">${escapeHtml(initials(invite.serverName || '?'))}</span>
+        <span class="server-invite-info">
+          <strong>${escapeHtml(invite.serverName || 'Sunucu')}</strong>
+          <span><i class="server-invite-online"></i>${Number(invite.memberCount || 0)} üye</span>
+        </span>
+      </div>
+      <button type="button" class="server-invite-action${joined ? ' joined' : ''}">${action}</button>
+    </div>`;
+}
+
+function refreshServerInviteCards(serverId) {
+  document.querySelectorAll(`.server-invite-card[data-server-id="${CSS.escape(String(serverId))}"]`)
+    .forEach((card) => {
+      const btn = card.querySelector('.server-invite-action');
+      if (!btn) return;
+      btn.textContent = 'Sunucuya Git';
+      btn.classList.add('joined');
+    });
+}
+
+function bindServerInviteCard(messageEl, invite) {
+  const btn = messageEl.querySelector('.server-invite-action');
+  if (!btn || !invite.serverId) return;
+  btn.addEventListener('click', () => {
+    const existing = servers.find((s) => String(s.id) === String(invite.serverId));
+    if (existing) {
+      selectServer(existing.id);
+      return;
+    }
+    if (!invite.inviteCode || btn.disabled) return;
+    btn.disabled = true;
+    btn.textContent = 'Katılınıyor…';
+    socket.emit('join-server', { code: invite.inviteCode }, (res) => {
+      btn.disabled = false;
+      if (res?.error) {
+        btn.textContent = 'Katıl';
+        toast(res.error);
+        return;
+      }
+      if (!servers.some((s) => s.id === res.server.id)) servers.push(res.server);
+      renderRail();
+      refreshServerInviteCards(res.server.id);
+      toast('Sunucuya katıldın');
+    });
+  });
+}
+
 function makeMsgEl(author, text, ts, msgId = null, extra = {}) {
   const div = document.createElement('div');
   div.className = 'msg' + (extra.compact ? ' msg--compact' : '');
@@ -1159,12 +1214,16 @@ function makeMsgEl(author, text, ts, msgId = null, extra = {}) {
     }).join('')}</div>`;
   }
   const editedHtml = extra.edited ? ' <span class="msg-edited">(düzenlendi)</span>' : '';
+  const invite = extra.metadata?.type === 'server_invite' ? extra.metadata : null;
+  const messageHtml = invite
+    ? serverInviteCardHtml(invite)
+    : `<div class="msg-text">${escapeHtml(text)}${editedHtml}</div>`;
   if (extra.compact) {
     div.innerHTML = `
       <span class="msg-gutter">${formatTime(ts)}</span>
       <div class="msg-body">
         ${replyHtml}
-        <div class="msg-text">${escapeHtml(text)}${editedHtml}</div>
+        ${messageHtml}
         ${reactHtml}
       </div>`;
   } else {
@@ -1174,10 +1233,11 @@ function makeMsgEl(author, text, ts, msgId = null, extra = {}) {
         <span class="msg-author">${escapeHtml(author || '—')}</span>
         <span class="msg-time">${formatTime(ts)}</span>
         ${replyHtml}
-        <div class="msg-text">${escapeHtml(text)}${editedHtml}</div>
+        ${messageHtml}
         ${reactHtml}
       </div>`;
   }
+  if (invite) bindServerInviteCard(div, invite);
   if (msgId && !extra.pending && ((activeView === 'dm' && activeDmChannelId) || (activeView === 'chat' && activeChannelId))) {
     div.dataset.allowMenu = '1';
     div.addEventListener('contextmenu', (e) => {
@@ -1243,7 +1303,8 @@ function shouldCompact(prev, meta) {
     && String(meta.authorId) === String(prev.authorId)
     && meta.ts - prev.ts < MSG_GROUP_WINDOW
     && dayKey(meta.ts) === dayKey(prev.ts)
-    && !meta.replyTo;
+    && !meta.replyTo
+    && meta.metadata?.type !== 'server_invite';
 }
 
 /** Mesaj listesini gruplayıp gün ayırıcılarla fragment üretir; state mutasyona uğrar */
@@ -1917,6 +1978,7 @@ function resolveChannelMsg(msg) {
     reactions: msg.reactions || {},
     replyTo: msg.replyTo || null,
     edited: !!msg.edited,
+    metadata: msg.metadata || null,
   };
 }
 
@@ -1943,6 +2005,7 @@ function resolveDmMsg(msg, friendId) {
     reactions: msg.reactions || {},
     replyTo: msg.replyTo || null,
     edited: !!msg.edited,
+    metadata: msg.metadata || null,
   };
 }
 
@@ -2121,6 +2184,7 @@ function openDM(friendId, push = true) {
   if (cacheId) {
     activeDmChannelId = cacheId;
     if (push) navTo(`/channels/@me/${cacheId}`);
+    if (dmIncoming?.channelId === cacheId) syncIncomingDmCallUi();
   }
 
   let prevRead = cacheId ? getLastRead('dm', cacheId) : 0;
@@ -2139,6 +2203,7 @@ function openDM(friendId, push = true) {
     if (res.error) { toast(res.error); return; }
     if (activeDmFriendId !== friendId) return;
     activeDmChannelId = res.dmChannelId;
+    if (dmIncoming?.channelId === res.dmChannelId) syncIncomingDmCallUi();
     dmPins = res.pins || [];
     if (res.social) social = res.social;
     if (friend) {
@@ -2168,6 +2233,7 @@ function openGroupChannel(channel, push = true) {
   activeGroupId = channel.id;
   activeGroupTitle = channel.name || channel.title || 'Grup';
   activeDmChannelId = channel.id;
+  if (dmIncoming?.channelId === channel.id) syncIncomingDmCallUi();
   activeChannelId = null;
   loadingOlderMsgs = false;
   dmHistoryExpanded = false;
@@ -2224,6 +2290,7 @@ function openDMByChannel(dmChannelId, push = false) {
   activeChannelId = null;
   activeDmChannelId = dmChannelId;
   if (push) navTo(`/channels/@me/${dmChannelId}`);
+  if (dmIncoming?.channelId === dmChannelId) syncIncomingDmCallUi();
 
   const cached = readMsgCache('dm', dmChannelId);
   if (cached?.messages?.length) {
@@ -3563,6 +3630,14 @@ function connectSocket(token) {
     }
   });
 
+  socket.on('dm-invite-sent', ({ channelId, targetId, message }) => {
+    if (channelId) appendMsgCache('dm', channelId, message);
+    if (activeView !== 'dm' || activeGroupId) return;
+    if (activeDmChannelId === channelId || activeDmFriendId === targetId) {
+      appendResolvedMessage($('dm-messages'), message, (m) => resolveDmMsg(m, targetId));
+    }
+  });
+
   socket.on('dm-pins-updated', ({ channelId, pins }) => {
     if (channelId === activeDmChannelId) {
       dmPins = pins || [];
@@ -3666,12 +3741,6 @@ function connectSocket(token) {
       $('sidebar-title').textContent = server.name;
     }
     renderRail();
-  });
-
-  socket.on('server-invited', ({ server }) => {
-    if (!servers.find((s) => s.id === server.id)) servers.push(server);
-    renderRail();
-    toast(`${server.name} sunucusuna eklendin`);
   });
 
   socket.on('server-deleted', ({ serverId }) => {
@@ -3830,22 +3899,47 @@ function cleanupDmCallUi() {
 
 function showIncomingDmCall({ channelId, fromId, fromUsername, ringMs }) {
   dmIncoming = { channelId, fromId, fromUsername };
-  const overlay = $('dm-incoming-overlay');
-  if (!overlay) return;
-  $('dm-incoming-name').textContent = fromUsername || 'Birisi';
-  $('dm-incoming-avatar').textContent = initials(fromUsername || '?');
-  $('dm-incoming-sub').textContent = 'Gelen arama · 20 sn';
-  overlay.classList.remove('hidden');
+  syncIncomingDmCallUi();
   clearTimeout(showIncomingDmCall._t);
   showIncomingDmCall._t = setTimeout(() => {
     if (dmIncoming?.channelId === channelId) hideIncomingDmCall();
   }, Math.min(ringMs || 20000, 21000));
 }
 
+function syncIncomingDmCallUi() {
+  if (!dmIncoming) return;
+  const { channelId, fromUsername } = dmIncoming;
+  const overlay = $('dm-incoming-overlay');
+  const inTargetDm = activeView === 'dm' && activeDmChannelId === channelId;
+
+  $('dm-incoming-name').textContent = fromUsername || 'Birisi';
+  $('dm-incoming-avatar').textContent = initials(fromUsername || '?');
+  $('dm-incoming-sub').textContent = 'Gelen arama · 20 sn';
+  overlay?.classList.toggle('hidden', inTargetDm);
+
+  const stage = $('dm-call-stage');
+  if (inTargetDm && stage) {
+    $('dm-call-name').textContent = fromUsername || 'Birisi';
+    $('dm-call-avatar').textContent = initials(fromUsername || '?');
+    $('dm-call-status').textContent = 'Gelen Arama…';
+    $('dm-call-banner')?.classList.remove('hidden');
+    $('dm-call-incoming-actions')?.classList.remove('hidden');
+    stage.classList.add('incoming');
+    stage.classList.remove('hidden');
+  } else if (stage?.classList.contains('incoming')) {
+    stage.classList.remove('incoming');
+    $('dm-call-incoming-actions')?.classList.add('hidden');
+    if (!dmCallActive && !dmCallRinging) stage.classList.add('hidden');
+  }
+}
+
 function hideIncomingDmCall() {
   clearTimeout(showIncomingDmCall._t);
   dmIncoming = null;
   $('dm-incoming-overlay')?.classList.add('hidden');
+  $('dm-call-incoming-actions')?.classList.add('hidden');
+  $('dm-call-stage')?.classList.remove('incoming');
+  if (!dmCallActive && !dmCallRinging) dmFeatures?.showCallStage?.(false);
 }
 
 async function enterDmCallMedia({ ringing = false } = {}) {
@@ -3952,6 +4046,14 @@ function toggleDmScreen() { voiceManager?.toggleScreen(); }
 
 $('dm-incoming-accept')?.addEventListener('click', () => acceptIncomingDmCall());
 $('dm-incoming-reject')?.addEventListener('click', () => rejectIncomingDmCall());
+$('dm-call-inline-accept')?.addEventListener('click', () => acceptIncomingDmCall());
+$('dm-call-inline-reject')?.addEventListener('click', () => rejectIncomingDmCall());
+$('dm-call-inline-video')?.addEventListener('click', async () => {
+  await acceptIncomingDmCall();
+  if (voiceManager && !voiceManager.isCameraOn()) {
+    try { await voiceManager.toggleCamera(); } catch {}
+  }
+});
 
 function setupDeferredModules() {
   if (!initDmFeatures || dmFeatures) return;

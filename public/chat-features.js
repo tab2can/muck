@@ -522,8 +522,9 @@ export function initChatFeatures(api) {
   function showCallStage(visible) {
     $('dm-call-stage')?.classList.toggle('hidden', !visible);
     if (!visible) {
-      $('dm-call-stage')?.classList.remove('ringing');
+      $('dm-call-stage')?.classList.remove('ringing', 'incoming');
       $('dm-call-banner')?.classList.add('hidden');
+      $('dm-call-incoming-actions')?.classList.add('hidden');
     }
   }
 

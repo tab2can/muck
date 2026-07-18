@@ -329,6 +329,15 @@
                   <div class="dm-call-status" id="dm-call-status">Aranıyor…</div>
                 </div>
               </div>
+              <div id="dm-call-incoming-actions" class="dm-call-incoming-actions hidden">
+                <button type="button" class="dm-call-incoming-btn dm-call-incoming-btn--video" id="dm-call-inline-video" title="Görüntülü kabul et" aria-label="Görüntülü kabul et">
+                  <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M4 6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h10l4 3V5l-4 3H4Z"/></svg>
+                </button>
+                <button type="button" class="dm-call-incoming-btn dm-call-incoming-btn--accept" id="dm-call-inline-accept" title="Kabul et" aria-label="Kabul et">
+                  <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M6.6 10.8a15.5 15.5 0 0 0 6.6 6.6l2.2-2.2c.3-.3.7-.4 1.1-.2 1.2.4 2.5.6 3.8.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.7 21 3 13.3 3 3c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.6.6 3.8.1.4 0 .8-.3 1.1L6.6 10.8Z"/></svg>
+                </button>
+                <button type="button" class="dm-call-incoming-btn dm-call-incoming-btn--reject" id="dm-call-inline-reject" title="Reddet" aria-label="Reddet">×</button>
+              </div>
               <div class="voice-grid dm-voice-grid" id="dm-voice-grid"></div>
               <div class="dm-call-controls">
                 <button type="button" class="dm-call-ctrl" id="dm-call-mic" title="Mikrofon" aria-label="Mikrofon">
@@ -535,8 +544,10 @@
         <div class="dm-incoming-sub" id="dm-incoming-sub">Gelen arama</div>
       </div>
       <div class="dm-incoming-actions">
-        <button type="button" class="dm-incoming-btn dm-incoming-btn--reject" id="dm-incoming-reject" title="Reddet">Reddet</button>
-        <button type="button" class="dm-incoming-btn dm-incoming-btn--accept" id="dm-incoming-accept" title="Kabul et">Kabul et</button>
+        <button type="button" class="dm-incoming-btn dm-incoming-btn--reject" id="dm-incoming-reject" title="Reddet" aria-label="Reddet">×</button>
+        <button type="button" class="dm-incoming-btn dm-incoming-btn--accept" id="dm-incoming-accept" title="Kabul et" aria-label="Kabul et">
+          <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M6.6 10.8a15.5 15.5 0 0 0 6.6 6.6l2.2-2.2c.3-.3.7-.4 1.1-.2 1.2.4 2.5.6 3.8.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.7 21 3 13.3 3 3c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.6.6 3.8.1.4 0 .8-.3 1.1L6.6 10.8Z"/></svg>
+        </button>
       </div>
     </div>
   </div>
