@@ -74,6 +74,7 @@ let dmProfileOpen = true;
 let dmPanelMode = null; // null | search | pins
 let dmCallActive = false;
 let dmCallRinging = false; // giden arama (karşı taraf bekleniyor)
+let dmCallChannelId = null; // arama hangi DM kanalında (navigasyon activeDmChannelId'yi silse bile)
 let dmIncoming = null; // { channelId, fromId, fromUsername }
 let dmReply = null;
 let dmFeatures = null;
@@ -2261,6 +2262,7 @@ function openDM(friendId, push = true) {
     activeDmChannelId = cacheId;
     if (push) navTo(`/channels/@me/${cacheId}`);
     if (dmIncoming?.channelId === cacheId) syncIncomingDmCallUi();
+    restoreDmCallStageIfNeeded();
   }
 
   let prevRead = cacheId ? getLastRead('dm', cacheId) : 0;
@@ -2280,6 +2282,7 @@ function openDM(friendId, push = true) {
     if (activeDmFriendId !== friendId) return;
     activeDmChannelId = res.dmChannelId;
     if (dmIncoming?.channelId === res.dmChannelId) syncIncomingDmCallUi();
+    restoreDmCallStageIfNeeded();
     dmPins = res.pins || [];
     if (res.social) social = res.social;
     if (friend) {
@@ -2322,6 +2325,7 @@ function openGroupChannel(channel, push = true) {
   setMainView('dm');
   updateDmComposer();
   renderFriends();
+  restoreDmCallStageIfNeeded();
 
   if (push) navTo(`/channels/@me/${channel.id}`);
 
@@ -2374,6 +2378,7 @@ function openDMByChannel(dmChannelId, push = false) {
     dmHasMore = cached.hasMore !== false;
     renderDMMessages(cached.messages, activeDmFriendId);
     insertUnreadDivider($('dm-messages'), prevRead);
+    restoreDmCallStageIfNeeded();
   }
 
   socket.emit('get-dm-by-channel', { dmChannelId }, (res) => {
@@ -2405,6 +2410,7 @@ function openDMByChannel(dmChannelId, push = false) {
     dmFeatures?.updateCallStage?.(res.friend.username);
     setMainView('dm');
     updateDmComposer();
+    restoreDmCallStageIfNeeded();
     dmPins = res.pins || [];
     writeMsgCache('dm', res.dmChannelId, res.messages || [], res.hasMore);
     if (!dmHistoryExpanded) {
@@ -2798,6 +2804,7 @@ async function joinVoiceChannel(channelId, name, push = true) {
   if (voiceManager) voiceManager.leave();
   dmCallActive = false;
   dmCallRinging = false;
+  dmCallChannelId = null;
   dmFeatures?.showCallStage?.(false);
   hideIncomingDmCall();
   activeChannelId = null;
@@ -3787,13 +3794,16 @@ function connectSocket(token) {
   });
 
   socket.on('dm-call-update', ({ channelId, participants }) => {
-    if (channelId !== activeDmChannelId) return;
+    if (channelId !== dmCallChannelId && channelId !== activeDmChannelId) return;
     if (dmCallActive) {
       voiceManager?.onPresence?.(participants || []);
       const others = (participants || []).filter((p) => p.userId !== currentUser?.id);
       if (dmCallRinging && others.length) {
         dmCallRinging = false;
         dmFeatures?.setCallRinging?.(false, 'Arama sürüyor');
+      }
+      if (activeView === 'dm' && activeDmChannelId === channelId) {
+        restoreDmCallStageIfNeeded();
       }
     }
   });
@@ -3806,9 +3816,10 @@ function connectSocket(token) {
 
   socket.on('dm-call-ring-ended', ({ channelId, reason }) => {
     if (dmIncoming?.channelId === channelId) hideIncomingDmCall();
-    if (channelId !== activeDmChannelId && !(dmCallActive || dmCallRinging)) return;
+    const inThisCall = channelId === dmCallChannelId || channelId === activeDmChannelId;
+    if (!inThisCall && !(dmCallActive || dmCallRinging)) return;
     if (reason === 'timeout' || reason === 'reject' || reason === 'cancel' || reason === 'ended') {
-      if (dmCallRinging || dmCallActive) {
+      if ((dmCallRinging || dmCallActive) && channelId === dmCallChannelId) {
         const msg = reason === 'timeout' ? 'Arama yanıtlanmadı'
           : reason === 'reject' ? 'Arama reddedildi'
           : reason === 'ended' ? 'Arama sona erdi'
@@ -3817,14 +3828,17 @@ function connectSocket(token) {
         toast(msg);
       }
     } else if (reason === 'accepted') {
-      dmCallRinging = false;
-      dmFeatures?.setCallRinging?.(false, 'Arama sürüyor');
-      if ($('voice-conn-title')) $('voice-conn-title').textContent = 'Ses Bağlantısı Kuruldu';
+      if (channelId === dmCallChannelId || channelId === activeDmChannelId) {
+        dmCallRinging = false;
+        dmFeatures?.setCallRinging?.(false, 'Arama sürüyor');
+        if ($('voice-conn-title')) $('voice-conn-title').textContent = 'Ses Bağlantısı Kuruldu';
+        restoreDmCallStageIfNeeded();
+      }
     }
   });
 
   socket.on('dm-call-alone-timeout', ({ channelId }) => {
-    if (channelId && channelId !== activeDmChannelId && !dmCallActive) return;
+    if (channelId && channelId !== dmCallChannelId && channelId !== activeDmChannelId && !dmCallActive) return;
     cleanupDmCallUi();
     toast('2 dakika yalnız kaldığın için aramadan ayrıldın');
   });
@@ -3941,7 +3955,35 @@ document.addEventListener('contextmenu', (e) => {
 
 /* ================= DM call + toolbar ================= */
 function dmCallPeerName() {
-  return activeGroupTitle || friends.find((f) => f.id === activeDmFriendId)?.username || 'DM';
+  if (dmCallChannelId && activeGroupId === dmCallChannelId) {
+    return activeGroupTitle || 'Grup';
+  }
+  if (dmCallChannelId && activeDmChannelId === dmCallChannelId) {
+    return activeGroupTitle || friends.find((f) => f.id === activeDmFriendId)?.username || 'DM';
+  }
+  const friend = friends.find((f) => f.dmChannelId === dmCallChannelId);
+  return friend?.username || activeGroupTitle || 'DM';
+}
+
+/** Sunucu/kanal gezince kaybolan arama sahnesini DM'ye dönünce geri getir */
+function restoreDmCallStageIfNeeded() {
+  if (!dmCallActive && !dmCallRinging) return;
+  if (!dmCallChannelId || activeDmChannelId !== dmCallChannelId) return;
+  if (activeView !== 'dm') return;
+
+  const name = dmCallPeerName();
+  dmFeatures?.updateCallStage?.(name);
+  dmFeatures?.showCallStage?.(true);
+  dmFeatures?.setCallRinging?.(!!dmCallRinging, dmCallRinging ? 'Aranıyor…' : 'Arama sürüyor');
+  $('dm-call-stage')?.classList.remove('incoming');
+  $('dm-call-incoming-actions')?.classList.add('hidden');
+  showVoiceFooter(name);
+  if ($('voice-conn-title')) {
+    $('voice-conn-title').textContent = dmCallRinging ? 'Aranıyor…' : 'Ses Bağlantısı Kuruldu';
+  }
+  syncDmCallControls();
+  paintVoiceGrid(lastVoiceState || emptyVoiceState());
+  if (dmIncoming?.channelId === dmCallChannelId) syncIncomingDmCallUi();
 }
 
 function syncDmCallControls() {
@@ -3980,6 +4022,7 @@ function cleanupDmCallUi() {
   const hadManager = !!voiceManager && (dmCallActive || dmCallRinging);
   dmCallActive = false;
   dmCallRinging = false;
+  dmCallChannelId = null;
   maximizedTile = null;
   lastVoiceState = null;
   lastSpeakingFlags = {};
@@ -4051,6 +4094,7 @@ async function enterDmCallMedia({ ringing = false } = {}) {
   // join() onUpdate tetikler — bayraklar ve sahne ÖNCE açık olmalı, yoksa ızgara boş kalır
   dmCallActive = true;
   dmCallRinging = !!ringing;
+  dmCallChannelId = activeDmChannelId;
   const name = dmCallPeerName();
   dmFeatures?.updateCallStage?.(name);
   dmFeatures?.showCallStage?.(true);
