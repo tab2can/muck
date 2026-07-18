@@ -929,33 +929,62 @@ export async function markDmRecipientsUnread(channel, fromId) {
   );
 }
 
-export async function pushDmChannelMessage(channelId, fromId, text, preloadedChannel = null) {
+function mapDmRow(data, channel = null) {
+  return {
+    id: data.id,
+    fromId: data.author_id,
+    text: data.content,
+    ts: new Date(data.created_at).getTime(),
+    reactions: data.reactions || {},
+    replyTo: data.reply_to || null,
+    mediaUrls: data.media_urls || [],
+    metadata: data.metadata || null,
+    ...(channel ? { _channel: channel } : {}),
+  };
+}
+
+export async function pushDmChannelMessage(channelId, fromId, text, preloadedChannel = null, metadata = null) {
   const channel = preloadedChannel || await getDMChannelById(channelId);
   if (!channel) return { error: 'Kanal bulunamadı.' };
   if (!channel.users.includes(fromId)) return { error: 'Yetkiniz yok.' };
+  const payload = {
+    channel_id: channelId,
+    author_id: fromId,
+    content: String(text || '').trim() || '—',
+  };
+  if (metadata) payload.metadata = metadata;
   const { data, error } = await supabase
     .from('dm_messages')
-    .insert({ channel_id: channelId, author_id: fromId, content: text.trim() })
+    .insert(payload)
     .select('*')
     .single();
   if (error) return { error: error.message };
-  const ts = new Date(data.created_at).getTime();
   supabase.from('dm_channels').update({
     last_message_at: data.created_at,
     last_from_id: fromId,
   }).eq('id', channelId).then(() => {}).catch(() => {});
 
-  return {
-    id: data.id,
-    fromId: data.author_id,
-    text: data.content,
-    ts,
-    reactions: data.reactions || {},
-    replyTo: data.reply_to || null,
-    mediaUrls: data.media_urls || [],
-    metadata: data.metadata || null,
-    _channel: channel,
-  };
+  return mapDmRow(data, channel);
+}
+
+/** Sistem / kart mesajı (davet, arama kaydı vb.) */
+export async function pushDmMetaMessage(channelId, fromId, text, metadata, preloadedChannel = null) {
+  return pushDmChannelMessage(channelId, fromId, text, preloadedChannel, metadata);
+}
+
+export async function updateDmMessageMeta(channelId, messageId, metadata, content = null) {
+  const patch = { metadata };
+  if (content != null) patch.content = String(content).slice(0, 2000);
+  const { data, error } = await supabase
+    .from('dm_messages')
+    .update(patch)
+    .eq('id', messageId)
+    .eq('channel_id', channelId)
+    .select('*')
+    .maybeSingle();
+  if (error) return { error: error.message };
+  if (!data) return { error: 'Mesaj bulunamadı.' };
+  return mapDmRow(data);
 }
 
 export async function pushDM(fromId, toId, text) {

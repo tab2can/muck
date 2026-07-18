@@ -669,6 +669,45 @@ html[data-theme="light"] .voice-conn { background: #e8ebf2; }
 .server-invite-action:hover { filter: brightness(1.08); }
 .server-invite-action:disabled { opacity: .65; cursor: wait; }
 .server-invite-action.joined { background: var(--accent); }
+
+/* DM arama sistem satırı */
+.msg.msg--system {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: .35rem .6rem;
+  margin: .15rem -.6rem;
+  animation: none;
+}
+.msg.msg--system:hover { background: color-mix(in srgb, var(--text) 4%, transparent); }
+.msg-call-sys {
+  display: flex;
+  align-items: center;
+  gap: .55rem;
+  width: 100%;
+  color: var(--muted);
+  font-size: .9rem;
+  line-height: 1.35;
+}
+.msg-call-icon {
+  width: 28px; height: 28px; flex: 0 0 auto;
+  display: grid; place-items: center;
+  color: #23a559;
+}
+.msg-call-text { flex: 1; min-width: 0; }
+.msg-call-text strong { color: var(--text); font-weight: 700; }
+.msg-call-join {
+  border: 0; background: none; padding: 0;
+  color: var(--accent); font: inherit; font-weight: 650;
+  cursor: pointer;
+}
+.msg-call-join:hover { text-decoration: underline; }
+.msg-call-time {
+  flex: 0 0 auto;
+  font-size: .72rem;
+  color: var(--muted);
+  margin-left: .35rem;
+}
 .chat-input { display: flex; gap: .5rem; padding: .75rem 1rem; border-top: 1px solid var(--border); flex: 0 0 auto; }
 .chat-input input { flex: 1; }
 

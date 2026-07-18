@@ -272,8 +272,97 @@ const voiceParticipants = new Map();
 const dmCallRings = new Map();
 // DM yalnız kalma: channelId -> timeout
 const dmAloneTimers = new Map();
+// DM arama sohbet kaydı: channelId -> { messageId, startedAt, fromId, fromUsername }
+const dmCallLogs = new Map();
 const DM_RING_MS = 20_000;
 const DM_ALONE_MS = 2 * 60_000;
+
+function formatCallDurationTr(ms) {
+  const sec = Math.max(0, Math.round(Number(ms || 0) / 1000));
+  if (sec < 60) return 'birkaç saniye';
+  const min = Math.round(sec / 60);
+  if (min === 1) return '1 dakika';
+  return `${min} dakika`;
+}
+
+function emitDmMessage(channel, message, fromId, fromUsername) {
+  if (!channel || !message) return;
+  const payload = {
+    channelId: channel.id,
+    type: channel.type,
+    fromId,
+    username: fromUsername,
+    message,
+    friendId: channel.type === 'dm' ? fromId : null,
+    muted: false,
+    ignored: false,
+    blocked: false,
+  };
+  for (const uid of channel.users) {
+    const sockets = onlineUsers.get(uid);
+    if (!sockets) continue;
+    for (const sid of sockets) io.to(sid).emit('dm', payload);
+  }
+}
+
+async function startDmCallLog(channel, fromId, fromUsername) {
+  if (!channel || dmCallLogs.has(channel.id)) return dmCallLogs.get(channel.id);
+  const startedAt = Date.now();
+  const metadata = {
+    type: 'dm_call',
+    status: 'active',
+    startedBy: fromId,
+    startedByName: fromUsername,
+    startedAt,
+  };
+  const result = await store.pushDmMetaMessage(
+    channel.id,
+    fromId,
+    `${fromUsername} bir arama başlattı.`,
+    metadata,
+    channel
+  );
+  if (result.error) return null;
+  const log = {
+    messageId: result.id,
+    startedAt,
+    fromId,
+    fromUsername,
+  };
+  dmCallLogs.set(channel.id, log);
+  delete result._channel;
+  emitDmMessage(channel, result, fromId, fromUsername);
+  return log;
+}
+
+async function endDmCallLog(channelId, reason = 'ended') {
+  const log = dmCallLogs.get(channelId);
+  if (!log) return null;
+  dmCallLogs.delete(channelId);
+  const channel = await store.getDMChannelById(channelId);
+  if (!channel) return null;
+  const durationMs = Math.max(0, Date.now() - log.startedAt);
+  const durationLabel = formatCallDurationTr(durationMs);
+  const name = log.fromUsername || 'Birisi';
+  const text = `${name}, ${durationLabel} süren bir arama başlattı.`;
+  const metadata = {
+    type: 'dm_call',
+    status: 'ended',
+    startedBy: log.fromId,
+    startedByName: name,
+    startedAt: log.startedAt,
+    endedAt: Date.now(),
+    durationMs,
+    reason,
+  };
+  const updated = await store.updateDmMessageMeta(channelId, log.messageId, metadata, text);
+  if (updated.error) return null;
+  emitToChannelUsers(channel, 'dm-call-log', {
+    channelId,
+    message: updated,
+  });
+  return updated;
+}
 
 async function clearDmRing(channelId, reason = 'cancel') {
   const ring = dmCallRings.get(channelId);
@@ -288,6 +377,11 @@ async function clearDmRing(channelId, reason = 'cancel') {
       fromId: ring.fromId,
       fromUsername: ring.fromUsername,
     });
+  }
+  // Bağlantı kurulmadan bittiyse veya herkes çıktıysa kaydı kapat
+  const still = voiceParticipants.get(channelId);
+  if (!still || still.size === 0) {
+    await endDmCallLog(channelId, reason);
   }
   return ring;
 }
@@ -493,7 +587,11 @@ async function leaveVoice(socket) {
       });
     }
     const remaining = voiceParticipants.get(channelId);
-    if (!remaining || remaining.size === 0) clearDmRing(channelId, 'ended');
+    if (!remaining || remaining.size === 0) {
+      await clearDmRing(channelId, 'ended');
+      // clearDmRing zaten log'u kapatır; ring yoksa yine de kapat
+      if (dmCallLogs.has(channelId)) await endDmCallLog(channelId, 'ended');
+    }
     refreshDmAloneTimer(channelId);
   } else {
     await broadcastVoicePresence(channelId);
@@ -1252,6 +1350,9 @@ io.on('connection', async (socket) => {
       fromUsername: socket.data.username,
       timer,
     });
+
+    // Sohbet geçmişine aktif arama satırı
+    await startDmCallLog(channel, userId, socket.data.username);
 
     emitToChannelUsers(channel, 'dm-call-incoming', {
       channelId,

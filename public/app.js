@@ -1153,6 +1153,73 @@ function serverInviteCardHtml(invite) {
     </div>`;
 }
 
+function formatCallDurationLabel(ms) {
+  const sec = Math.max(0, Math.round(Number(ms || 0) / 1000));
+  if (sec < 60) return 'birkaç saniye';
+  const min = Math.round(sec / 60);
+  if (min === 1) return '1 dakika';
+  return `${min} dakika`;
+}
+
+function dmCallSystemHtml(meta, ts) {
+  const name = meta.startedByName || 'Birisi';
+  const time = formatTime(ts);
+  if (meta.status === 'active') {
+    return `
+      <div class="msg-call-sys" data-call-status="active">
+        <span class="msg-call-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M6.6 10.8a15.5 15.5 0 0 0 6.6 6.6l2.2-2.2c.3-.3.7-.4 1.1-.2 1.2.4 2.5.6 3.8.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.7 21 3 13.3 3 3c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.6.6 3.8.1.4 0 .8-.3 1.1L6.6 10.8Z"/></svg>
+        </span>
+        <span class="msg-call-text">
+          <strong>${escapeHtml(name)}</strong> bir arama başlattı.
+          <button type="button" class="msg-call-join">— Aramaya katıl</button>
+        </span>
+        <span class="msg-call-time">${escapeHtml(time)}</span>
+      </div>`;
+  }
+  const dur = meta.durationLabel || formatCallDurationLabel(meta.durationMs);
+  return `
+    <div class="msg-call-sys" data-call-status="ended">
+      <span class="msg-call-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M6.6 10.8a15.5 15.5 0 0 0 6.6 6.6l2.2-2.2c.3-.3.7-.4 1.1-.2 1.2.4 2.5.6 3.8.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.7 21 3 13.3 3 3c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.6.6 3.8.1.4 0 .8-.3 1.1L6.6 10.8Z"/></svg>
+      </span>
+      <span class="msg-call-text">
+        <strong>${escapeHtml(name)}</strong>, ${escapeHtml(dur)} süren bir arama başlattı.
+      </span>
+      <span class="msg-call-time">${escapeHtml(time)}</span>
+    </div>`;
+}
+
+function bindDmCallSystem(el, meta) {
+  const joinBtn = el.querySelector('.msg-call-join');
+  if (!joinBtn) return;
+  joinBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (dmCallActive || dmCallRinging) return;
+    if (dmIncoming?.channelId === activeDmChannelId) {
+      acceptIncomingDmCall();
+      return;
+    }
+    startDmCall();
+  });
+}
+
+function applyDmCallLogUpdate(message) {
+  if (!message?.id) return;
+  const el = document.querySelector(`.msg[data-msg-id="${CSS.escape(String(message.id))}"]`);
+  if (!el) return;
+  const meta = message.metadata;
+  if (meta?.type !== 'dm_call') return;
+  el.className = 'msg msg--system';
+  el.innerHTML = dmCallSystemHtml(meta, message.ts);
+  bindDmCallSystem(el, meta);
+  // Cache güncelle
+  if (activeDmChannelId) {
+    updateCachedMsg('dm', activeDmChannelId, (msgs) =>
+      msgs.map((m) => (String(m.id) === String(message.id) ? { ...m, ...message } : m)));
+  }
+}
+
 function refreshServerInviteCards(serverId) {
   document.querySelectorAll(`.server-invite-card[data-server-id="${CSS.escape(String(serverId))}"]`)
     .forEach((card) => {
@@ -1215,6 +1282,13 @@ function makeMsgEl(author, text, ts, msgId = null, extra = {}) {
   }
   const editedHtml = extra.edited ? ' <span class="msg-edited">(düzenlendi)</span>' : '';
   const invite = extra.metadata?.type === 'server_invite' ? extra.metadata : null;
+  const callMeta = extra.metadata?.type === 'dm_call' ? extra.metadata : null;
+  if (callMeta) {
+    div.className = 'msg msg--system';
+    div.innerHTML = dmCallSystemHtml(callMeta, ts);
+    bindDmCallSystem(div, callMeta);
+    return div;
+  }
   const messageHtml = invite
     ? serverInviteCardHtml(invite)
     : `<div class="msg-text">${escapeHtml(text)}${editedHtml}</div>`;
@@ -1304,7 +1378,8 @@ function shouldCompact(prev, meta) {
     && meta.ts - prev.ts < MSG_GROUP_WINDOW
     && dayKey(meta.ts) === dayKey(prev.ts)
     && !meta.replyTo
-    && meta.metadata?.type !== 'server_invite';
+    && meta.metadata?.type !== 'server_invite'
+    && meta.metadata?.type !== 'dm_call';
 }
 
 /** Mesaj listesini gruplayıp gün ayırıcılarla fragment üretir; state mutasyona uğrar */
@@ -1789,6 +1864,7 @@ function copyToClipboard(text, okMsg) {
 function buildMsgToolbar(msgEl) {
   document.querySelectorAll('.msg-actions').forEach((b) => b.remove());
   if (!msgEl.dataset.msgId || msgEl.dataset.pending === '1') return;
+  if (msgEl.classList.contains('msg--system')) return;
   const channelId = currentMsgChannelId();
   if (!channelId) return;
   const messageId = msgEl.dataset.msgId;
@@ -3598,14 +3674,18 @@ function connectSocket(token) {
 
   socket.on('dm', ({ friendId, username, message, muted, ignored, blocked, channelId, type }) => {
     const isGroupView = type === 'group' || (channelId && activeGroupId === channelId);
-    const isDmView = !isGroupView && activeDmFriendId === friendId && activeView === 'dm';
+    const isDmView = !isGroupView && activeView === 'dm' && (
+      (!!channelId && activeDmChannelId === channelId)
+      || (!!friendId && activeDmFriendId === friendId)
+    );
     if (channelId) appendMsgCache('dm', channelId, message);
     if (activeView === 'dm' && (isDmView || (isGroupView && activeGroupId === channelId))) {
-      appendResolvedMessage($('dm-messages'), message, (m) => resolveDmMsg(m, friendId));
+      const resolveFriend = activeGroupId ? null : (activeDmFriendId || friendId);
+      appendResolvedMessage($('dm-messages'), message, (m) => resolveDmMsg(m, resolveFriend));
       if (channelId) setLastRead('dm', channelId, Date.now());
       if (!blocked) {
         if (isGroupView) socket.emit('group-dm-read', { channelId });
-        else socket.emit('dm-read', { friendId });
+        else if (activeDmFriendId) socket.emit('dm-read', { friendId: activeDmFriendId });
       }
     } else {
       const localMuted = type === 'group'
@@ -3635,6 +3715,24 @@ function connectSocket(token) {
     if (activeView !== 'dm' || activeGroupId) return;
     if (activeDmChannelId === channelId || activeDmFriendId === targetId) {
       appendResolvedMessage($('dm-messages'), message, (m) => resolveDmMsg(m, targetId));
+    }
+  });
+
+  socket.on('dm-call-log', ({ channelId, message }) => {
+    if (!message) return;
+    if (channelId) {
+      updateCachedMsg('dm', channelId, (msgs) => {
+        const idx = msgs.findIndex((m) => String(m.id) === String(message.id));
+        if (idx >= 0) {
+          const next = msgs.slice();
+          next[idx] = { ...next[idx], ...message };
+          return next;
+        }
+        return [...msgs, message];
+      });
+    }
+    if (channelId === activeDmChannelId && activeView === 'dm') {
+      applyDmCallLogUpdate(message);
     }
   });
 
