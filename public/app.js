@@ -997,7 +997,10 @@ function openFriendsView(tab = friendsTab, push = true) {
   activeDmChannelId = null;
   activeGroupId = null;
   activeGroupTitle = '';
-  endDmCall();
+  // Aktif DM aramasını kesme — sohbet kapanır, bağlantı footer'da kalır
+  if (!(dmCallActive || dmCallRinging)) {
+    dmFeatures?.showCallStage?.(false);
+  }
   showSidebarHome();
   renderFriends();
   setMainView('friends');
