@@ -285,6 +285,7 @@ function updatePanel() {
   active?.classList.add('hidden');
   searchPanel?.classList.add('hidden');
   pinsPanel?.classList.add('hidden');
+  $('right-panel')?.classList.remove('panel--profile');
 
   if (activeView === 'friends') {
     renderActiveNow();
@@ -322,6 +323,7 @@ function updatePanel() {
       } else {
         renderProfile();
         profile?.classList.remove('hidden');
+        $('right-panel')?.classList.add('panel--profile');
       }
       app.classList.add('with-panel');
     } else {
@@ -415,6 +417,8 @@ function isMemberOnline(id) {
   return onlineMembers.has(id);
 }
 
+const profilePanelCache = {}; // friendId -> get-profile sonucu
+
 function renderProfile() {
   const friend = friends.find((f) => f.id === activeDmFriendId);
   if (!friend) return;
@@ -424,7 +428,45 @@ function renderProfile() {
   const online = !!friend.online;
   $('profile-status').querySelector('.status-dot').classList.toggle('on', online);
   $('profile-status-text').textContent = online ? 'Çevrimiçi' : 'Çevrimdışı';
+  $('profile-avatar-dot')?.classList.toggle('on', online);
+
+  const applyDetails = (p) => {
+    if (!p || activeDmFriendId !== friend.id) return;
+    const mf = p.mutualFriends?.length || 0;
+    const ms = p.mutualServers?.length || 0;
+    const mutualsEl = $('profile-mutuals');
+    if (mutualsEl) mutualsEl.textContent = `${mf} Ortak Arkadaş • ${ms} Ortak Sunucu`;
+    if ($('profile-member-since')) {
+      $('profile-member-since').textContent = p.user?.createdAt ? formatDateTr(p.user.createdAt) : '—';
+    }
+  };
+
+  // Önce önbellek — sonra arka planda tazele
+  applyDetails(profilePanelCache[friend.id]);
+  if (!profilePanelCache[friend.id]) {
+    const mutualsEl = $('profile-mutuals');
+    if (mutualsEl) mutualsEl.textContent = '';
+    if ($('profile-member-since')) $('profile-member-since').textContent = '—';
+  }
+  socket?.emit('get-profile', { userId: friend.id }, (res) => {
+    if (res?.error) return;
+    profilePanelCache[friend.id] = res;
+    applyDetails(res);
+  });
 }
+
+$('profile-full-btn')?.addEventListener('click', () => {
+  if (activeDmFriendId) openUserProfile(activeDmFriendId);
+});
+$('profile-mutuals')?.addEventListener('click', () => {
+  if (activeDmFriendId) openUserProfile(activeDmFriendId);
+});
+$('profile-more-btn')?.addEventListener('click', (e) => {
+  const friend = friends.find((f) => f.id === activeDmFriendId);
+  if (!friend) return;
+  const r = e.currentTarget.getBoundingClientRect();
+  openDmContextMenu(r.left, r.bottom + 6, friend);
+});
 
 /* ================= Rail ================= */
 function renderRail() {
