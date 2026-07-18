@@ -285,6 +285,58 @@ function formatCallDurationTr(ms) {
   return `${min} dakika`;
 }
 
+function getDmCallState(channelId, userId) {
+  if (!channelId) return null;
+  const ring = dmCallRings.get(channelId);
+  const log = dmCallLogs.get(channelId);
+  const participants = getVoiceList(channelId);
+  const inCall = participants.some((p) => p.userId === userId);
+
+  if (ring) {
+    return {
+      status: 'ringing',
+      channelId,
+      fromId: ring.fromId,
+      fromUsername: ring.fromUsername,
+      startedAt: log?.startedAt || Date.now(),
+      messageId: log?.messageId || null,
+      ringMs: DM_RING_MS,
+      participants,
+      inCall,
+    };
+  }
+
+  if (participants.length > 0 && log) {
+    return {
+      status: 'active',
+      channelId,
+      fromId: log.fromId,
+      fromUsername: log.fromUsername,
+      startedAt: log.startedAt,
+      messageId: log.messageId,
+      participants,
+      inCall,
+    };
+  }
+
+  // Zil bitti ama yalnız arayan hâlâ odada — katılmaya açık
+  if (participants.length > 0) {
+    const starter = participants[0];
+    return {
+      status: 'active',
+      channelId,
+      fromId: starter.userId,
+      fromUsername: starter.username,
+      startedAt: Date.now(),
+      messageId: log?.messageId || null,
+      participants,
+      inCall,
+    };
+  }
+
+  return null;
+}
+
 function emitDmMessage(channel, message, fromId, fromUsername) {
   if (!channel || !message) return;
   const payload = {
@@ -981,6 +1033,7 @@ io.on('connection', async (socket) => {
       channel: pubChannel,
       pins: pinRes.pins || [],
       social,
+      activeCall: getDmCallState(channel.id, userId),
       ...bs,
     });
     setImmediate(() => { emitSocial(userId).catch(() => {}); });
@@ -1009,6 +1062,7 @@ io.on('connection', async (socket) => {
         dmChannelId: channel.id,
         pins: pinRes.pins || [],
         social,
+        activeCall: getDmCallState(channel.id, userId),
       });
       setImmediate(() => { emitSocial(userId).catch(() => {}); });
       return;
@@ -1045,6 +1099,7 @@ io.on('connection', async (socket) => {
       dmChannelId: channel.id,
       pins: pinRes.pins || [],
       social,
+      activeCall: getDmCallState(channel.id, userId),
       ...bs,
     });
     setImmediate(() => { emitSocial(userId).catch(() => {}); });

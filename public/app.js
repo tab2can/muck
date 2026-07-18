@@ -2286,6 +2286,7 @@ function openDM(friendId, push = true) {
     activeDmChannelId = res.dmChannelId;
     if (dmIncoming?.channelId === res.dmChannelId) syncIncomingDmCallUi();
     restoreDmCallStageIfNeeded();
+    applyActiveCallState(res.activeCall, res.dmChannelId);
     dmPins = res.pins || [];
     if (res.social) social = res.social;
     if (friend) {
@@ -2362,6 +2363,7 @@ function openGroupChannel(channel, push = true) {
       softSyncDmMessages(res.messages, null, prevRead);
     }
     setLastRead('dm', channel.id, Date.now());
+    applyActiveCallState(res.activeCall, channel.id);
     updatePanel();
   });
   closeDrawers();
@@ -2414,6 +2416,7 @@ function openDMByChannel(dmChannelId, push = false) {
     setMainView('dm');
     updateDmComposer();
     restoreDmCallStageIfNeeded();
+    applyActiveCallState(res.activeCall, res.dmChannelId);
     dmPins = res.pins || [];
     writeMsgCache('dm', res.dmChannelId, res.messages || [], res.hasMore);
     if (!dmHistoryExpanded) {
@@ -3693,6 +3696,20 @@ function connectSocket(token) {
       const resolveFriend = activeGroupId ? null : (activeDmFriendId || friendId);
       appendResolvedMessage($('dm-messages'), message, (m) => resolveDmMsg(m, resolveFriend));
       if (channelId) setLastRead('dm', channelId, Date.now());
+      // Aktif arama sistemi mesajı geldiyse üst paneli de aç
+      if (message?.metadata?.type === 'dm_call' && message.metadata.status === 'active') {
+        if (!dmCallActive && !dmCallRinging && String(message.metadata.startedBy) !== String(currentUser?.id)) {
+          dmIncoming = {
+            channelId,
+            fromId: message.metadata.startedBy,
+            fromUsername: message.metadata.startedByName,
+            status: 'ringing',
+          };
+          syncIncomingDmCallUi();
+        } else if (String(message.metadata.startedBy) === String(currentUser?.id)) {
+          restoreDmCallStageIfNeeded();
+        }
+      }
       if (!blocked) {
         if (isGroupView) socket.emit('group-dm-read', { channelId });
         else if (activeDmFriendId) socket.emit('dm-read', { friendId: activeDmFriendId });
@@ -3970,6 +3987,10 @@ function dmCallPeerName() {
 
 /** Sunucu/kanal gezince kaybolan arama sahnesini DM'ye dönünce geri getir */
 function restoreDmCallStageIfNeeded() {
+  if (dmIncoming?.channelId && activeDmChannelId === dmIncoming.channelId && activeView === 'dm') {
+    syncIncomingDmCallUi();
+    return;
+  }
   if (!dmCallActive && !dmCallRinging) return;
   if (!dmCallChannelId || activeDmChannelId !== dmCallChannelId) return;
   if (activeView !== 'dm') return;
@@ -3986,7 +4007,38 @@ function restoreDmCallStageIfNeeded() {
   }
   syncDmCallControls();
   paintVoiceGrid(lastVoiceState || emptyVoiceState());
-  if (dmIncoming?.channelId === dmCallChannelId) syncIncomingDmCallUi();
+}
+
+/** open-dm cevabındaki aktif arama durumunu üst panele yansıt */
+function applyActiveCallState(activeCall, channelId) {
+  if (!channelId || activeView !== 'dm' || activeDmChannelId !== channelId) return;
+
+  if (!activeCall) {
+    // Bu kanalda aktif arama yok — yanlışlıkla kalan incoming UI'yi temizle
+    if (dmIncoming?.channelId === channelId && !dmCallActive && !dmCallRinging) {
+      hideIncomingDmCall();
+    }
+    return;
+  }
+
+  const fromMe = String(activeCall.fromId) === String(currentUser?.id);
+
+  if (activeCall.inCall || (fromMe && (dmCallActive || dmCallRinging))) {
+    dmCallChannelId = channelId;
+    dmCallActive = true;
+    dmCallRinging = activeCall.status === 'ringing' && fromMe;
+    restoreDmCallStageIfNeeded();
+    return;
+  }
+
+  // Karşı taraf arıyor veya arama sürüyor — üstte gelen arama / katıl paneli
+  dmIncoming = {
+    channelId,
+    fromId: activeCall.fromId,
+    fromUsername: activeCall.fromUsername,
+    status: activeCall.status === 'ringing' ? 'ringing' : 'active',
+  };
+  syncIncomingDmCallUi();
 }
 
 function syncDmCallControls() {
@@ -4044,32 +4096,42 @@ function cleanupDmCallUi() {
 function showIncomingDmCall({ channelId, fromId, fromUsername, ringMs }) {
   dmIncoming = { channelId, fromId, fromUsername };
   syncIncomingDmCallUi();
+  // Yerel timeout sadece overlay'i gizlemesin — sunucu dm-call-ring-ended ile temizler.
+  // Navigasyon sırasında dmIncoming kaybolmasın diye agresif clear yok.
   clearTimeout(showIncomingDmCall._t);
+  const ms = Math.min(Math.max(Number(ringMs) || 20000, 5000), 120000);
   showIncomingDmCall._t = setTimeout(() => {
-    if (dmIncoming?.channelId === channelId) hideIncomingDmCall();
-  }, Math.min(ringMs || 20000, 21000));
+    // Sadece hâlâ bu DM'de değilsek ve arama bitmiş gibi görünüyorsa temizle
+    if (dmIncoming?.channelId !== channelId) return;
+    if (dmCallActive || dmCallRinging) return;
+    if (activeView === 'dm' && activeDmChannelId === channelId) {
+      // Panel açık kalsın; kullanıcı katılabilir. Soft re-sync sunucudan gelecek.
+      return;
+    }
+  }, ms);
 }
 
 function syncIncomingDmCallUi() {
   if (!dmIncoming) return;
-  const { channelId, fromUsername } = dmIncoming;
+  const { channelId, fromUsername, status } = dmIncoming;
   const overlay = $('dm-incoming-overlay');
   const inTargetDm = activeView === 'dm' && activeDmChannelId === channelId;
+  const statusText = status === 'active' ? 'Arama sürüyor…' : 'Gelen Arama…';
 
   $('dm-incoming-name').textContent = fromUsername || 'Birisi';
   $('dm-incoming-avatar').textContent = initials(fromUsername || '?');
-  $('dm-incoming-sub').textContent = 'Gelen arama · 20 sn';
+  $('dm-incoming-sub').textContent = status === 'active' ? 'Devam eden arama' : 'Gelen arama';
   overlay?.classList.toggle('hidden', inTargetDm);
 
   const stage = $('dm-call-stage');
   if (inTargetDm && stage) {
     $('dm-call-name').textContent = fromUsername || 'Birisi';
     $('dm-call-avatar').textContent = initials(fromUsername || '?');
-    $('dm-call-status').textContent = 'Gelen Arama…';
+    $('dm-call-status').textContent = statusText;
     $('dm-call-banner')?.classList.remove('hidden');
     $('dm-call-incoming-actions')?.classList.remove('hidden');
     stage.classList.add('incoming');
-    stage.classList.remove('hidden');
+    stage.classList.remove('hidden', 'ringing');
   } else if (stage?.classList.contains('incoming')) {
     stage.classList.remove('incoming');
     $('dm-call-incoming-actions')?.classList.add('hidden');
