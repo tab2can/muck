@@ -818,6 +818,36 @@ io.on('connection', async (socket) => {
     });
   });
 
+  socket.on('edit-message', async ({ channelId, messageId, text }, cb) => {
+    const result = await store.editChannelMessage(userId, channelId, messageId, text);
+    if (result.error) return cb?.({ error: result.error });
+    cb?.(result);
+    io.to(`chan:${channelId}`).emit('message-edited', { channelId, ...result });
+  });
+
+  socket.on('delete-message', async ({ channelId, messageId }, cb) => {
+    const result = await store.deleteChannelMessage(userId, channelId, messageId);
+    if (result.error) return cb?.({ error: result.error });
+    cb?.(result);
+    io.to(`chan:${channelId}`).emit('message-deleted', { channelId, messageId });
+  });
+
+  socket.on('edit-dm-message', async ({ channelId, messageId, text }, cb) => {
+    const result = await store.editDmMessage(userId, channelId, messageId, text);
+    if (result.error) return cb?.({ error: result.error });
+    cb?.(result);
+    const channel = await store.getDMChannelById(channelId);
+    if (channel) emitToChannelUsers(channel, 'dm-edited', { channelId, ...result });
+  });
+
+  socket.on('delete-dm-message', async ({ channelId, messageId }, cb) => {
+    const result = await store.deleteDmMessage(userId, channelId, messageId);
+    if (result.error) return cb?.({ error: result.error });
+    cb?.(result);
+    const channel = await store.getDMChannelById(channelId);
+    if (channel) emitToChannelUsers(channel, 'dm-deleted', { channelId, messageId });
+  });
+
   // ---- DMs ----
   socket.on('open-dm', async ({ friendId }, cb) => {
     const friend = await store.findById(friendId);

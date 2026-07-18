@@ -696,6 +696,7 @@ export async function getMessages(channelId, { limit = PAGE_SIZE, beforeTs = nul
       mediaUrls: m.media_urls || [],
       reactions: m.reactions || {},
       replyTo: m.reply_to || null,
+      edited: !!m.edited_at,
     })),
     hasMore,
   };
@@ -714,7 +715,54 @@ async function enrichSearchRows(rows) {
     ts: new Date(m.created_at).getTime(),
     reactions: m.reactions || {},
     replyTo: m.reply_to || null,
+    edited: !!m.edited_at,
   }));
+}
+
+async function editMessageInTable(table, pinTable, userId, channelId, messageId, text) {
+  const t = String(text || '').trim();
+  if (!t || t.length > 2000) return { error: 'Mesaj 1-2000 karakter olmalı.' };
+  const { data: msg } = await supabase.from(table).select('*').eq('id', messageId).maybeSingle();
+  if (!msg || msg.channel_id !== channelId) return { error: 'Mesaj bulunamadı.' };
+  if (msg.author_id !== userId) return { error: 'Sadece kendi mesajını düzenleyebilirsin.' };
+  const editedAt = new Date().toISOString();
+  const { error } = await supabase.from(table).update({ content: t, edited_at: editedAt }).eq('id', messageId);
+  if (error) return { error: error.message };
+  supabase.from(pinTable).update({ text: t }).eq('message_id', messageId).then(() => {}).catch(() => {});
+  return { messageId, text: t, editedAt: new Date(editedAt).getTime() };
+}
+
+async function deleteMessageInTable(table, userId, channelId, messageId) {
+  const { data: msg } = await supabase.from(table).select('id, channel_id, author_id').eq('id', messageId).maybeSingle();
+  if (!msg || msg.channel_id !== channelId) return { error: 'Mesaj bulunamadı.' };
+  if (msg.author_id !== userId) return { error: 'Sadece kendi mesajını silebilirsin.' };
+  const { error } = await supabase.from(table).delete().eq('id', messageId);
+  if (error) return { error: error.message };
+  return { messageId };
+}
+
+export async function editChannelMessage(userId, channelId, messageId, text) {
+  const found = await findChannel(channelId);
+  if (!found || !isMember(found.server, userId)) return { error: 'Yetkiniz yok.' };
+  return editMessageInTable('messages', 'channel_pins', userId, channelId, messageId, text);
+}
+
+export async function deleteChannelMessage(userId, channelId, messageId) {
+  const found = await findChannel(channelId);
+  if (!found || !isMember(found.server, userId)) return { error: 'Yetkiniz yok.' };
+  return deleteMessageInTable('messages', userId, channelId, messageId);
+}
+
+export async function editDmMessage(userId, channelId, messageId, text) {
+  const channel = await getDMChannelById(channelId);
+  if (!channel || !channel.users.includes(userId)) return { error: 'Yetkiniz yok.' };
+  return editMessageInTable('dm_messages', 'dm_pins', userId, channelId, messageId, text);
+}
+
+export async function deleteDmMessage(userId, channelId, messageId) {
+  const channel = await getDMChannelById(channelId);
+  if (!channel || !channel.users.includes(userId)) return { error: 'Yetkiniz yok.' };
+  return deleteMessageInTable('dm_messages', userId, channelId, messageId);
 }
 
 export async function searchDmChannel(userId, channelId, query, limit = 50) {
@@ -927,6 +975,7 @@ export async function getDmChannelMessages(channelId, { limit = PAGE_SIZE, befor
       reactions: m.reactions || {},
       replyTo: m.reply_to || null,
       mediaUrls: m.media_urls || [],
+      edited: !!m.edited_at,
     })),
     hasMore,
   };

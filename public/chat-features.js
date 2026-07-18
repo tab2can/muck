@@ -376,16 +376,7 @@ export function initChatFeatures(api) {
       label: 'Yanıtla',
       onClick: () => {
         api.closeCtxMenu?.();
-        replyDraft = {
-          id: msg.id,
-          fromId: msg.fromId || msg.userId,
-          text: msg.text,
-          username: msg.username || msg.author || '—',
-        };
-        markReply?.(replyDraft);
-        $(replyBarId())?.classList.remove('hidden');
-        if ($(replyTextId())) $(replyTextId()).textContent = replyDraft.text;
-        $(inputId())?.focus();
+        startReply(msg);
       },
     });
     if (kind() === 'dm') {
@@ -463,6 +454,25 @@ export function initChatFeatures(api) {
         catch { toast('Kopyalanamadı'); }
       },
     });
+    const myId = String(state.currentUserId || '');
+    if (myId && String(msg.fromId || msg.userId || '') === myId) {
+      sep();
+      add({
+        label: 'Mesajı Düzenle',
+        onClick: () => {
+          api.closeCtxMenu?.();
+          api.startEditMessage?.(msg.id);
+        },
+      });
+      add({
+        label: 'Mesajı Sil',
+        danger: true,
+        onClick: () => {
+          api.closeCtxMenu?.();
+          api.deleteMessage?.(msg.id);
+        },
+      });
+    }
     sep();
     add({
       label: 'Mesaj Bildir',
@@ -485,6 +495,19 @@ export function initChatFeatures(api) {
       });
     }
     api.placeCtxMenu?.(menu, x, y);
+  }
+
+  function startReply(msg) {
+    replyDraft = {
+      id: msg.id,
+      fromId: msg.fromId || msg.userId,
+      text: msg.text,
+      username: msg.username || msg.author || '—',
+    };
+    markReply?.(replyDraft);
+    $(replyBarId())?.classList.remove('hidden');
+    if ($(replyTextId())) $(replyTextId()).textContent = replyDraft.text;
+    $(inputId())?.focus();
   }
 
   function clearReply() {
@@ -619,6 +642,7 @@ export function initChatFeatures(api) {
     openGroupModal,
     closeGroupModal,
     getReplyDraft,
+    startReply,
     clearReply,
     showEmojiPanel,
     hideEmojiPanel,

@@ -4,6 +4,7 @@
    - `migrations/001_init.sql`
    - `migrations/002_grants_and_wipe.sql` (GRANT + wipe RPC)
    - `migrations/003_channel_msg_parity.sql` (kanal tepki/yanıt/pin + arama index)
+   - `migrations/004_message_edit.sql` (mesaj düzenleme: edited_at)
 2. Auth → Providers → Email: Confirm email açık
 3. Auth → URL Configuration:
    - Site URL: `https://muck.tr`
