@@ -306,7 +306,7 @@ function getDmCallState(channelId, userId) {
     };
   }
 
-  if (participants.length > 0 && log) {
+  if (log) {
     return {
       status: 'active',
       channelId,
@@ -319,7 +319,7 @@ function getDmCallState(channelId, userId) {
     };
   }
 
-  // Zil bitti ama yalnız arayan hâlâ odada — katılmaya açık
+  // Log yok ama odada biri var — katılmaya açık
   if (participants.length > 0) {
     const starter = participants[0];
     return {
@@ -328,7 +328,7 @@ function getDmCallState(channelId, userId) {
       fromId: starter.userId,
       fromUsername: starter.username,
       startedAt: Date.now(),
-      messageId: log?.messageId || null,
+      messageId: null,
       participants,
       inCall,
     };
@@ -1395,9 +1395,16 @@ io.on('connection', async (socket) => {
       return cb?.({ ok: true, ringing: true });
     }
 
-    const timer = setTimeout(() => {
+    const timer = setTimeout(async () => {
+      // Önce odadakileri çıkar, sonra zili/kayıtı kapat — stale "Aramaya katıl" kalmasın
+      await Promise.all(
+        [...(voiceParticipants.get(channelId)?.keys() || [])].map(async (sid) => {
+          const s = io.sockets.sockets.get(sid);
+          if (s?.data?.dmCall) await leaveVoice(s);
+        })
+      );
       clearDmRing(channelId, 'timeout');
-      kickDmCallParticipants(channelId);
+      if (dmCallLogs.has(channelId)) await endDmCallLog(channelId, 'timeout');
     }, DM_RING_MS);
 
     dmCallRings.set(channelId, {

@@ -271,7 +271,16 @@ function setMainView(view) {
 
   $('btn-friends-nav')?.classList.toggle('active', view === 'friends' && !activeDmFriendId && !activeGroupId);
   updatePanel();
-  if (dmIncoming) syncIncomingDmCallUi();
+  // DM'ye girince arama panelini yenile; çıkarken ASLA gizleme (view-dm parent zaten gizli)
+  if (view === 'dm') {
+    restoreDmCallStageIfNeeded();
+    if (dmIncoming) syncIncomingDmCallUi();
+  } else if (view !== 'dm' && dmIncoming) {
+    // Sadece global overlay: hedef DM dışındaysak göster
+    const overlay = $('dm-incoming-overlay');
+    const showOverlay = !(dmCallActive || dmCallRinging);
+    overlay?.classList.toggle('hidden', !showOverlay);
+  }
 }
 
 /* ================= Right panel (üyeler / profil / şimdi aktif) ================= */
@@ -2254,19 +2263,19 @@ function openDM(friendId, push = true) {
   dmFeatures?.closeSearchPanel?.();
   dmFeatures?.closePinsPanel?.();
   dmFeatures?.updateCallStage?.(friend.username);
+  dmHistoryExpanded = false;
+
+  // Kanal id ÖNCE — setMainView/syncIncoming doğru kanalda çalışsın
+  const cacheId = friend.dmChannelId || null;
+  if (cacheId) activeDmChannelId = cacheId;
+  else activeDmChannelId = null;
+
   setMainView('dm');
   updateDmComposer();
   renderFriends();
-  dmHistoryExpanded = false;
-
-  // Bilinen kanal id ile URL + aktif kanal anında
-  const cacheId = friend.dmChannelId || null;
-  if (cacheId) {
-    activeDmChannelId = cacheId;
-    if (push) navTo(`/channels/@me/${cacheId}`);
-    if (dmIncoming?.channelId === cacheId) syncIncomingDmCallUi();
-    restoreDmCallStageIfNeeded();
-  }
+  if (cacheId && push) navTo(`/channels/@me/${cacheId}`);
+  restoreDmCallStageIfNeeded();
+  if (dmIncoming?.channelId === cacheId) syncIncomingDmCallUi();
 
   let prevRead = cacheId ? getLastRead('dm', cacheId) : 0;
   const cached = cacheId ? readMsgCache('dm', cacheId) : null;
@@ -2274,6 +2283,7 @@ function openDM(friendId, push = true) {
     dmHasMore = cached.hasMore !== false;
     renderDMMessages(cached.messages, friendId);
     insertUnreadDivider($('dm-messages'), prevRead);
+    if (cacheId) applyActiveCallState(null, cacheId, cached.messages);
   } else {
     $('dm-messages').innerHTML = '';
     ensureHistoryLoader($('dm-messages'));
@@ -2284,16 +2294,15 @@ function openDM(friendId, push = true) {
     if (res.error) { toast(res.error); return; }
     if (activeDmFriendId !== friendId) return;
     activeDmChannelId = res.dmChannelId;
-    if (dmIncoming?.channelId === res.dmChannelId) syncIncomingDmCallUi();
-    restoreDmCallStageIfNeeded();
-    applyActiveCallState(res.activeCall, res.dmChannelId);
-    dmPins = res.pins || [];
-    if (res.social) social = res.social;
     if (friend) {
       friend.blocked = !!res.blockedByMe;
       friend.blockedByThem = !!res.blockedByThem;
       friend.dmChannelId = res.dmChannelId;
     }
+    restoreDmCallStageIfNeeded();
+    applyActiveCallState(res.activeCall, res.dmChannelId, res.messages || []);
+    dmPins = res.pins || [];
+    if (res.social) social = res.social;
     updateDmComposer();
     if (!prevRead) prevRead = getLastRead('dm', res.dmChannelId);
     writeMsgCache('dm', res.dmChannelId, res.messages || [], res.hasMore);
@@ -2363,7 +2372,7 @@ function openGroupChannel(channel, push = true) {
       softSyncDmMessages(res.messages, null, prevRead);
     }
     setLastRead('dm', channel.id, Date.now());
-    applyActiveCallState(res.activeCall, channel.id);
+    applyActiveCallState(res.activeCall, channel.id, res.messages || []);
     updatePanel();
   });
   closeDrawers();
@@ -2416,7 +2425,7 @@ function openDMByChannel(dmChannelId, push = false) {
     setMainView('dm');
     updateDmComposer();
     restoreDmCallStageIfNeeded();
-    applyActiveCallState(res.activeCall, res.dmChannelId);
+    applyActiveCallState(res.activeCall, res.dmChannelId, res.messages || []);
     dmPins = res.pins || [];
     writeMsgCache('dm', res.dmChannelId, res.messages || [], res.hasMore);
     if (!dmHistoryExpanded) {
@@ -3835,7 +3844,15 @@ function connectSocket(token) {
   });
 
   socket.on('dm-call-ring-ended', ({ channelId, reason }) => {
-    if (dmIncoming?.channelId === channelId) hideIncomingDmCall();
+    // Zil bitti: kabul edildiyse ve henüz katılmadıysak "aktif arama" paneli kalsın
+    if (dmIncoming?.channelId === channelId) {
+      if (reason === 'accepted' && !(dmCallActive || dmCallRinging)) {
+        dmIncoming = { ...dmIncoming, status: 'active' };
+        syncIncomingDmCallUi();
+      } else {
+        hideIncomingDmCall();
+      }
+    }
     const inThisCall = channelId === dmCallChannelId || channelId === activeDmChannelId;
     if (!inThisCall && !(dmCallActive || dmCallRinging)) return;
     if (reason === 'timeout' || reason === 'reject' || reason === 'cancel' || reason === 'ended') {
@@ -4009,34 +4026,85 @@ function restoreDmCallStageIfNeeded() {
   paintVoiceGrid(lastVoiceState || emptyVoiceState());
 }
 
-/** open-dm cevabındaki aktif arama durumunu üst panele yansıt */
-function applyActiveCallState(activeCall, channelId) {
-  if (!channelId || activeView !== 'dm' || activeDmChannelId !== channelId) return;
+function findActiveCallMessage(messages) {
+  const list = messages || [];
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const meta = list[i]?.metadata;
+    if (meta?.type === 'dm_call' && meta.status === 'active') return list[i];
+  }
+  return null;
+}
 
-  if (!activeCall) {
-    // Bu kanalda aktif arama yok — yanlışlıkla kalan incoming UI'yi temizle
+/** open-dm cevabındaki aktif arama durumunu üst panele yansıt */
+function applyActiveCallState(activeCall, channelId, messages = []) {
+  if (!channelId || activeView !== 'dm') return;
+  if (activeDmChannelId && activeDmChannelId !== channelId) return;
+
+  // Zaten bu aramadayız — sahneyi zorla geri getir
+  if ((dmCallActive || dmCallRinging) && dmCallChannelId === channelId) {
+    restoreDmCallStageIfNeeded();
+    return;
+  }
+
+  let call = activeCall;
+  if (!call) {
+    const msg = findActiveCallMessage(messages);
+    if (msg?.metadata) {
+      call = {
+        status: 'active',
+        fromId: msg.metadata.startedBy,
+        fromUsername: msg.metadata.startedByName,
+        inCall: false,
+      };
+    }
+  }
+
+  if (!call) {
+    // Sunucu + mesajda arama yoksa incoming'i temizle
     if (dmIncoming?.channelId === channelId && !dmCallActive && !dmCallRinging) {
       hideIncomingDmCall();
     }
     return;
   }
 
-  const fromMe = String(activeCall.fromId) === String(currentUser?.id);
+  const fromMe = String(call.fromId) === String(currentUser?.id);
 
-  if (activeCall.inCall || (fromMe && (dmCallActive || dmCallRinging))) {
-    dmCallChannelId = channelId;
-    dmCallActive = true;
-    dmCallRinging = activeCall.status === 'ringing' && fromMe;
-    restoreDmCallStageIfNeeded();
+  if (call.inCall || fromMe) {
+    if (!dmCallChannelId) dmCallChannelId = channelId;
+    if (call.inCall && !dmCallActive && !dmCallRinging) {
+      dmCallActive = true;
+      dmCallChannelId = channelId;
+    }
+    // Kendi aramamızda incoming paneli kapat
+    if (dmIncoming?.channelId === channelId) {
+      clearTimeout(showIncomingDmCall._t);
+      dmIncoming = null;
+      $('dm-incoming-overlay')?.classList.add('hidden');
+      $('dm-call-incoming-actions')?.classList.add('hidden');
+      $('dm-call-stage')?.classList.remove('incoming');
+    }
+    const name = fromMe ? dmCallPeerName() : (call.fromUsername || dmCallPeerName());
+    dmFeatures?.updateCallStage?.(name);
+    dmFeatures?.showCallStage?.(true);
+    dmFeatures?.setCallRinging?.(
+      !!dmCallRinging,
+      dmCallRinging ? 'Aranıyor…' : 'Arama sürüyor'
+    );
+    $('dm-call-stage')?.classList.remove('hidden', 'incoming');
+    $('dm-call-incoming-actions')?.classList.add('hidden');
+    $('dm-call-banner')?.classList.remove('hidden');
+    if ($('dm-call-status')) {
+      $('dm-call-status').textContent = dmCallRinging ? 'Aranıyor…' : 'Arama sürüyor';
+    }
     return;
   }
 
   // Karşı taraf arıyor veya arama sürüyor — üstte gelen arama / katıl paneli
   dmIncoming = {
     channelId,
-    fromId: activeCall.fromId,
-    fromUsername: activeCall.fromUsername,
-    status: activeCall.status === 'ringing' ? 'ringing' : 'active',
+    fromId: call.fromId,
+    fromUsername: call.fromUsername,
+    status: call.status === 'ringing' ? 'ringing' : 'active',
   };
   syncIncomingDmCallUi();
 }
@@ -4121,22 +4189,22 @@ function syncIncomingDmCallUi() {
   $('dm-incoming-name').textContent = fromUsername || 'Birisi';
   $('dm-incoming-avatar').textContent = initials(fromUsername || '?');
   $('dm-incoming-sub').textContent = status === 'active' ? 'Devam eden arama' : 'Gelen arama';
-  overlay?.classList.toggle('hidden', inTargetDm);
+  // Hedef DM dışındayken overlay; DM içindeyken üst sahne
+  if (inTargetDm) overlay?.classList.add('hidden');
+  else if (!dmCallActive && !dmCallRinging) overlay?.classList.remove('hidden');
 
   const stage = $('dm-call-stage');
-  if (inTargetDm && stage) {
-    $('dm-call-name').textContent = fromUsername || 'Birisi';
-    $('dm-call-avatar').textContent = initials(fromUsername || '?');
-    $('dm-call-status').textContent = statusText;
-    $('dm-call-banner')?.classList.remove('hidden');
-    $('dm-call-incoming-actions')?.classList.remove('hidden');
-    stage.classList.add('incoming');
-    stage.classList.remove('hidden', 'ringing');
-  } else if (stage?.classList.contains('incoming')) {
-    stage.classList.remove('incoming');
-    $('dm-call-incoming-actions')?.classList.add('hidden');
-    if (!dmCallActive && !dmCallRinging) stage.classList.add('hidden');
-  }
+  if (!stage) return;
+  // Navigasyonda stage'i ASLA gizleme — sadece hedef DM'deyken kur/göster
+  if (!inTargetDm) return;
+
+  $('dm-call-name').textContent = fromUsername || 'Birisi';
+  $('dm-call-avatar').textContent = initials(fromUsername || '?');
+  $('dm-call-status').textContent = statusText;
+  $('dm-call-banner')?.classList.remove('hidden');
+  $('dm-call-incoming-actions')?.classList.remove('hidden');
+  stage.classList.add('incoming');
+  stage.classList.remove('hidden', 'ringing');
 }
 
 function hideIncomingDmCall() {
