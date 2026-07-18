@@ -1215,6 +1215,14 @@ export async function markGroupRead(userId, channelId) {
   return { social: s };
 }
 
+export async function markGroupUnread(userId, channelId) {
+  const s = await getSocial(userId);
+  s.unreadGroups[channelId] = true;
+  s.closedGroups = s.closedGroups.filter((id) => id !== channelId);
+  await saveSocial(userId, s);
+  return { social: s };
+}
+
 export async function setGroupMuted(userId, channelId, until) {
   const s = await getSocial(userId);
   if (until === null || until === undefined) delete s.mutedGroups[channelId];

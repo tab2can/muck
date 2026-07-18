@@ -850,13 +850,23 @@ io.on('connection', async (socket) => {
 
   // ---- DMs ----
   socket.on('open-dm', async ({ friendId }, cb) => {
-    const friend = await store.findById(friendId);
-    const friends = await store.getFriends(userId);
+    const [friend, friends] = await Promise.all([
+      store.findById(friendId),
+      store.getFriends(userId),
+    ]);
     if (!friend || !friends.some((f) => f.id === friendId)) return cb?.({ error: 'Arkadaş bulunamadı.' });
     const channel = await store.getOrCreateDMChannel(userId, friendId);
-    await store.reopenDm(userId, friendId);
-    await store.markDmRead(userId, friendId);
-    const bs = await store.blockState(userId, friendId);
+
+    const [bs, pinRes, page, social, pubChannel] = await Promise.all([
+      store.blockState(userId, friendId),
+      store.getDmPins(userId, channel.id),
+      store.getDMs(userId, friendId, { limit: 20 }),
+      store.getSocial(userId),
+      store.publicDmChannel(channel, userId),
+      store.reopenDm(userId, friendId),
+      store.markDmRead(userId, friendId),
+    ]);
+
     if (!socket.data.dmChannelCache) socket.data.dmChannelCache = {};
     socket.data.dmChannelCache[channel.id] = channel;
     if (!socket.data.blockCache) socket.data.blockCache = {};
@@ -864,60 +874,70 @@ io.on('connection', async (socket) => {
       blocked: !!bs.blockedByMe,
       blockedByThem: !!bs.blockedByThem,
     };
-    const pinRes = await store.getDmPins(userId, channel.id);
-    const page = await store.getDMs(userId, friendId, { limit: 20 });
+
     cb?.({
       messages: page.messages,
       hasMore: page.hasMore,
       friend: { id: friend.id, username: friend.username },
       dmChannelId: channel.id,
-      channel: await store.publicDmChannel(channel, userId),
+      channel: pubChannel,
       pins: pinRes.pins || [],
-      social: await store.getSocial(userId),
+      social,
       ...bs,
     });
-    await emitSocial(userId);
+    setImmediate(() => { emitSocial(userId).catch(() => {}); });
   });
 
   socket.on('get-dm-by-channel', async ({ dmChannelId }, cb) => {
     const channel = await store.getDMChannelById(dmChannelId);
     if (!channel || !channel.users.includes(userId)) return cb?.({ error: 'DM bulunamadı.' });
 
+    if (!socket.data.dmChannelCache) socket.data.dmChannelCache = {};
+    socket.data.dmChannelCache[channel.id] = channel;
+
     if (channel.type === 'group') {
-      await store.markGroupRead(userId, channel.id);
-      if (!socket.data.dmChannelCache) socket.data.dmChannelCache = {};
-      socket.data.dmChannelCache[channel.id] = channel;
-      const pinRes = await store.getDmPins(userId, channel.id);
-      const page = await store.getDmChannelMessages(channel.id, { limit: 20 });
+      const [pinRes, page, social, pubChannel] = await Promise.all([
+        store.getDmPins(userId, channel.id),
+        store.getDmChannelMessages(channel.id, { limit: 20 }),
+        store.getSocial(userId),
+        store.publicDmChannel(channel, userId),
+        store.markGroupRead(userId, channel.id),
+      ]);
       cb?.({
         type: 'group',
         messages: page.messages,
         hasMore: page.hasMore,
-        channel: await store.publicDmChannel(channel, userId),
+        channel: pubChannel,
         dmChannelId: channel.id,
         pins: pinRes.pins || [],
-        social: await store.getSocial(userId),
+        social,
       });
-      await emitSocial(userId);
+      setImmediate(() => { emitSocial(userId).catch(() => {}); });
       return;
     }
 
     const friendId = channel.users.find((u) => u !== userId);
-    const friend = await store.findById(friendId);
-    const friends = await store.getFriends(userId);
+    const [friend, friends] = await Promise.all([
+      store.findById(friendId),
+      store.getFriends(userId),
+    ]);
     if (!friend || !friends.some((f) => f.id === friendId)) return cb?.({ error: 'Arkadaş bulunamadı.' });
-    await store.reopenDm(userId, friendId);
-    await store.markDmRead(userId, friendId);
-    const bs = await store.blockState(userId, friendId);
-    if (!socket.data.dmChannelCache) socket.data.dmChannelCache = {};
-    socket.data.dmChannelCache[channel.id] = channel;
+
+    const [bs, pinRes, page, social] = await Promise.all([
+      store.blockState(userId, friendId),
+      store.getDmPins(userId, channel.id),
+      store.getDMs(userId, friendId, { limit: 20 }),
+      store.getSocial(userId),
+      store.reopenDm(userId, friendId),
+      store.markDmRead(userId, friendId),
+    ]);
+
     if (!socket.data.blockCache) socket.data.blockCache = {};
     socket.data.blockCache[friendId] = {
       blocked: !!bs.blockedByMe,
       blockedByThem: !!bs.blockedByThem,
     };
-    const pinRes = await store.getDmPins(userId, channel.id);
-    const page = await store.getDMs(userId, friendId, { limit: 20 });
+
     cb?.({
       type: 'dm',
       messages: page.messages,
@@ -926,10 +946,10 @@ io.on('connection', async (socket) => {
       friendId,
       dmChannelId: channel.id,
       pins: pinRes.pins || [],
-      social: await store.getSocial(userId),
+      social,
       ...bs,
     });
-    await emitSocial(userId);
+    setImmediate(() => { emitSocial(userId).catch(() => {}); });
   });
 
   socket.on('load-dm-messages', async ({ channelId, beforeTs }, cb) => {
@@ -1104,6 +1124,13 @@ io.on('connection', async (socket) => {
 
   socket.on('dm-unread', async ({ friendId }, cb) => {
     const result = await store.markDmUnread(userId, friendId);
+    if (result.error) return cb?.({ error: result.error });
+    cb?.(result);
+    emitSocial(userId);
+  });
+
+  socket.on('group-unread', async ({ channelId }, cb) => {
+    const result = await store.markGroupUnread(userId, channelId);
     if (result.error) return cb?.({ error: result.error });
     cb?.(result);
     emitSocial(userId);

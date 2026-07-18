@@ -1613,20 +1613,33 @@ function setLastRead(kind, id, ts) {
   try { localStorage.setItem(lastReadKey(kind, id), String(ts)); } catch {}
 }
 
+function makeUnreadDividerEl() {
+  const div = document.createElement('div');
+  div.className = 'msg-unread-divider';
+  div.innerHTML = '<span class="msg-unread-label">YENİ</span>';
+  return div;
+}
+
+/** afterTs sonrası ilk mesajın üstüne YENİ çizgisi koyar */
 function insertUnreadDivider(container, afterTs) {
   container.querySelector('.msg-unread-divider')?.remove();
-  if (!afterTs) return;
+  const cutoff = Number(afterTs);
+  if (!cutoff) return; // 0 / NaN = hiç okunma kaydı yok, çizgi gösterme
   for (const el of container.querySelectorAll('.msg[data-ts]')) {
     const ts = Number(el.dataset.ts || 0);
-    const own = el.dataset.authorId && String(el.dataset.authorId) === String(currentUser?.id || '');
-    if (ts > afterTs && !own) {
-      const div = document.createElement('div');
-      div.className = 'msg-unread-divider';
-      div.innerHTML = '<span class="msg-unread-label">YENİ</span>';
-      el.parentElement.insertBefore(div, el);
+    if (ts > cutoff) {
+      el.parentElement.insertBefore(makeUnreadDividerEl(), el);
       return;
     }
   }
+}
+
+/** Belirli mesajın hemen üstüne YENİ çizgisi */
+function insertUnreadDividerBefore(msgEl) {
+  const container = msgEl?.closest?.('.chat-messages, #chat-messages, #dm-messages') || msgEl?.parentElement;
+  if (!container || !msgEl) return;
+  container.querySelector('.msg-unread-divider')?.remove();
+  msgEl.parentElement.insertBefore(makeUnreadDividerEl(), msgEl);
 }
 
 function markUnreadFromMessage(msgEl) {
@@ -1634,11 +1647,31 @@ function markUnreadFromMessage(msgEl) {
   if (!ts) return;
   const kind = currentMsgCacheKind();
   const channelId = currentMsgChannelId();
+  // Bu mesajdan itibaren okunmamış — lastRead, mesajın hemen altına
   if (channelId) setLastRead(kind, channelId, ts - 1);
-  const container = activeView === 'chat' ? $('chat-messages') : $('dm-messages');
-  if (container) insertUnreadDivider(container, ts - 1);
+  insertUnreadDividerBefore(msgEl);
+
+  // Sidebar okunmadı rozeti anında
   if (activeView === 'dm' && activeDmFriendId && !activeGroupId) {
+    const friend = friends.find((f) => f.id === activeDmFriendId);
+    if (friend) {
+      friend.unread = true;
+      friend.closed = false;
+    }
+    if (social.unreadDms) social.unreadDms[activeDmFriendId] = true;
+    else social.unreadDms = { [activeDmFriendId]: true };
+    renderFriends();
     socket.emit('dm-unread', { friendId: activeDmFriendId }, () => {});
+  } else if (activeView === 'dm' && activeGroupId) {
+    const group = groupDms.find((g) => g.id === activeGroupId);
+    if (group) {
+      group.unread = true;
+      group.closed = false;
+    }
+    if (social.unreadGroups) social.unreadGroups[activeGroupId] = true;
+    else social.unreadGroups = { [activeGroupId]: true };
+    renderFriends();
+    socket.emit('group-unread', { channelId: activeGroupId }, () => {});
   }
   toast('Okunmadı olarak işaretlendi');
 }
@@ -1886,7 +1919,6 @@ function openTextChannel(channelId, name, push = true) {
   renderChannels();
 
   const prevRead = getLastRead('chan', channelId);
-  setLastRead('chan', channelId, Date.now());
   const cached = readMsgCache('chan', channelId);
   if (cached?.messages?.length) {
     chatHasMore = cached.hasMore !== false;
@@ -1905,8 +1937,8 @@ function openTextChannel(channelId, name, push = true) {
     dmPins = res.pins || [];
     if (chatHistoryExpanded) return;
     chatHasMore = !!res.hasMore;
-    renderMessageList($('chat-messages'), res.messages || [], resolveChannelMsg);
-    insertUnreadDivider($('chat-messages'), prevRead);
+    softSyncChannelMessages(res.messages || [], prevRead);
+    setLastRead('chan', channelId, Date.now());
   });
   if (push && activeServer) navTo(`/channels/${activeServer.id}/${channelId}`);
   closeDrawers();
@@ -1983,6 +2015,43 @@ $('chat-form').addEventListener('submit', (e) => {
 });
 
 /* ================= DM ================= */
+function renderDMMessages(messages, friendId) {
+  renderMessageList($('dm-messages'), messages || [], (msg) => resolveDmMsg(msg, friendId));
+}
+
+/** Aynı mesaj seti zaten ekrandaysa DOM'u yeniden çizme (flash önler) */
+function softSyncDmMessages(messages, friendId, prevRead) {
+  const container = $('dm-messages');
+  const incoming = (messages || []).map((m) => String(m.id)).filter(Boolean);
+  const existing = [...container.querySelectorAll('.msg[data-msg-id]')]
+    .map((el) => el.dataset.msgId)
+    .filter((id) => id && !String(id).startsWith('local_'));
+  const same = incoming.length > 0
+    && incoming.length === existing.length
+    && incoming.every((id, i) => id === existing[i]);
+  if (!same) {
+    renderDMMessages(messages, friendId);
+  }
+  if (prevRead) insertUnreadDivider(container, prevRead);
+  return !same;
+}
+
+function softSyncChannelMessages(messages, prevRead) {
+  const container = $('chat-messages');
+  const incoming = (messages || []).map((m) => String(m.id)).filter(Boolean);
+  const existing = [...container.querySelectorAll('.msg[data-msg-id]')]
+    .map((el) => el.dataset.msgId)
+    .filter((id) => id && !String(id).startsWith('local_'));
+  const same = incoming.length > 0
+    && incoming.length === existing.length
+    && incoming.every((id, i) => id === existing[i]);
+  if (!same) {
+    renderMessageList(container, messages || [], resolveChannelMsg);
+  }
+  if (prevRead) insertUnreadDivider(container, prevRead);
+  return !same;
+}
+
 function openDM(friendId, push = true) {
   const friend = friends.find((f) => f.id === friendId);
   if (!friend) return;
@@ -2005,7 +2074,13 @@ function openDM(friendId, push = true) {
   renderFriends();
   dmHistoryExpanded = false;
 
-  const cacheId = friend.dmChannelId || activeDmChannelId;
+  // Bilinen kanal id ile URL + aktif kanal anında
+  const cacheId = friend.dmChannelId || null;
+  if (cacheId) {
+    activeDmChannelId = cacheId;
+    if (push) navTo(`/channels/@me/${cacheId}`);
+  }
+
   let prevRead = cacheId ? getLastRead('dm', cacheId) : 0;
   const cached = cacheId ? readMsgCache('dm', cacheId) : null;
   if (cached?.messages?.length) {
@@ -2031,13 +2106,14 @@ function openDM(friendId, push = true) {
     }
     updateDmComposer();
     if (!prevRead) prevRead = getLastRead('dm', res.dmChannelId);
-    setLastRead('dm', res.dmChannelId, Date.now());
     writeMsgCache('dm', res.dmChannelId, res.messages || [], res.hasMore);
     if (!dmHistoryExpanded) {
       dmHasMore = !!res.hasMore;
-      renderDMMessages(res.messages, friendId);
-      insertUnreadDivider($('dm-messages'), prevRead);
+      softSyncDmMessages(res.messages, friendId, prevRead);
     }
+    // Okundu olarak işaretle — divider gösterildikten sonra
+    setLastRead('dm', res.dmChannelId, Date.now());
+    // URL hâlâ eskiyse (ilk açılış / id yeni öğrenildi) güncelle
     if (push) navTo(`/channels/@me/${res.dmChannelId}`);
   });
   closeDrawers();
@@ -2063,8 +2139,9 @@ function openGroupChannel(channel, push = true) {
   updateDmComposer();
   renderFriends();
 
+  if (push) navTo(`/channels/@me/${channel.id}`);
+
   const prevRead = getLastRead('dm', channel.id);
-  setLastRead('dm', channel.id, Date.now());
   const cached = readMsgCache('dm', channel.id);
   if (cached?.messages?.length) {
     dmHasMore = cached.hasMore !== false;
@@ -2091,23 +2168,23 @@ function openGroupChannel(channel, push = true) {
     writeMsgCache('dm', channel.id, res.messages || [], res.hasMore);
     if (!dmHistoryExpanded) {
       dmHasMore = !!res.hasMore;
-      renderDMMessages(res.messages, null);
-      insertUnreadDivider($('dm-messages'), prevRead);
+      softSyncDmMessages(res.messages, null, prevRead);
     }
+    setLastRead('dm', channel.id, Date.now());
     updatePanel();
-    if (push) navTo(`/channels/@me/${channel.id}`);
   });
   closeDrawers();
 }
 
 function openDMByChannel(dmChannelId, push = false) {
   const prevRead = getLastRead('dm', dmChannelId);
+  activeServer = null;
+  activeChannelId = null;
+  activeDmChannelId = dmChannelId;
+  if (push) navTo(`/channels/@me/${dmChannelId}`);
+
   const cached = readMsgCache('dm', dmChannelId);
   if (cached?.messages?.length) {
-    // Hızlı önizleme — tip bilinmiyor, DM olarak çiz; sunucu düzeltir
-    activeServer = null;
-    activeChannelId = null;
-    activeDmChannelId = dmChannelId;
     setMainView('dm');
     dmHasMore = cached.hasMore !== false;
     renderDMMessages(cached.messages, activeDmFriendId);
@@ -2120,6 +2197,8 @@ function openDMByChannel(dmChannelId, push = false) {
       openGroupChannel(res.channel || { id: dmChannelId }, push);
       return;
     }
+    // Başka bir DM'ye geçmişsek bu cevabı yoksay
+    if (activeDmChannelId !== dmChannelId && activeDmFriendId !== res.friendId) return;
     activeServer = null;
     activeChannelId = null;
     activeGroupId = null;
@@ -2132,6 +2211,7 @@ function openDMByChannel(dmChannelId, push = false) {
       friend.blocked = !!res.blockedByMe;
       friend.blockedByThem = !!res.blockedByThem;
       friend.dmChannelId = res.dmChannelId;
+      friend.unread = false;
     }
     showSidebarHome();
     setRailActive('home');
@@ -2141,20 +2221,15 @@ function openDMByChannel(dmChannelId, push = false) {
     setMainView('dm');
     updateDmComposer();
     dmPins = res.pins || [];
-    setLastRead('dm', res.dmChannelId, Date.now());
     writeMsgCache('dm', res.dmChannelId, res.messages || [], res.hasMore);
     if (!dmHistoryExpanded) {
       dmHasMore = !!res.hasMore;
-      renderDMMessages(res.messages, res.friendId);
-      insertUnreadDivider($('dm-messages'), prevRead);
+      softSyncDmMessages(res.messages, res.friendId, prevRead);
     }
+    setLastRead('dm', res.dmChannelId, Date.now());
     if (push) navTo(`/channels/@me/${res.dmChannelId}`);
     closeDrawers();
   });
-}
-
-function renderDMMessages(messages, friendId) {
-  renderMessageList($('dm-messages'), messages || [], (msg) => resolveDmMsg(msg, friendId));
 }
 
 $('dm-form').addEventListener('submit', (e) => {
@@ -3362,6 +3437,20 @@ function connectSocket(token) {
     if (soc) social = soc;
     if (fr) friends = fr;
     if (gd) groupDms = gd;
+    // Açık sohbette YENİ çizgisi varken sunucunun "okundu" güncellemesi rozeti silmesin
+    if (activeView === 'dm' && $('dm-messages')?.querySelector('.msg-unread-divider')) {
+      if (activeDmFriendId && !activeGroupId) {
+        const f = friends.find((x) => x.id === activeDmFriendId);
+        if (f) f.unread = true;
+        if (!social.unreadDms) social.unreadDms = {};
+        social.unreadDms[activeDmFriendId] = true;
+      } else if (activeGroupId) {
+        const g = groupDms.find((x) => x.id === activeGroupId);
+        if (g) g.unread = true;
+        if (!social.unreadGroups) social.unreadGroups = {};
+        social.unreadGroups[activeGroupId] = true;
+      }
+    }
     renderFriends();
     if (activeView === 'dm' && activeDmFriendId) {
       renderProfile();
