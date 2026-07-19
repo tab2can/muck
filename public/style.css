@@ -3,6 +3,8 @@
   --safe-t: env(safe-area-inset-top,0px); --safe-b: env(safe-area-inset-bottom,0px);
   --safe-l: env(safe-area-inset-left,0px); --safe-r: env(safe-area-inset-right,0px);
   --rail-w: 72px; --sidebar-w: 260px; --panel-w: 240px; --ease: cubic-bezier(.22,1,.36,1); --dur: .24s;
+  --float-gap: 8px; --float-radius: 16px;
+  --float-shadow: 0 10px 28px rgba(0, 0, 0, .38);
   --accent: #5b8def; --accent-2: #4a7de0; --accent-contrast: #fff; --accent-soft: rgba(91,141,239,.14);
 }
 [data-accent="blue"]    { --accent:#5b8def; --accent-2:#4a7de0; --accent-soft:rgba(91,141,239,.16); }
@@ -31,6 +33,7 @@
   --surface:#fff; --surface-2:#f1f4f9; --surface-3:#e6eaf2;
   --border:#e2e7f0; --text:#1a2030; --muted:#66708a;
   --danger:#e0453d; --online:#16a34a; --live:#e11d48;
+  --float-shadow: 0 8px 24px rgba(20, 28, 48, .12);
   color-scheme: light;
 }
 
@@ -107,15 +110,24 @@ input:focus, .modal-input:focus { outline: none; border-color: var(--accent); bo
 .app {
   display: grid;
   grid-template-columns: var(--rail-w) var(--sidebar-w) 1fr;
+  gap: var(--float-gap);
+  padding: var(--float-gap);
   height: 100dvh;
   position: relative;
+  background: var(--bg);
+  box-sizing: border-box;
 }
 
 /* Rail */
 .rail {
   display: flex; flex-direction: column; align-items: center; gap: .5rem;
   padding: calc(.75rem + var(--safe-t)) .5rem calc(5.5rem + var(--safe-b));
-  background: var(--rail-bg); overflow-y: auto; scrollbar-width: none;
+  background: var(--sidebar-bg);
+  overflow-y: auto; scrollbar-width: none;
+  border-radius: var(--float-radius);
+  border: 1px solid var(--border);
+  box-shadow: var(--float-shadow);
+  min-height: 0;
 }
 .rail::-webkit-scrollbar { display: none; }
 .rail-btn { width: 48px; height: 48px; border: none; border-radius: 50%; background: var(--surface-2); color: var(--muted); cursor: pointer; display: grid; place-items: center; transition: border-radius .2s, background .15s, color .15s; flex-shrink: 0; }
@@ -128,7 +140,14 @@ input:focus, .modal-input:focus { outline: none; border-color: var(--accent); bo
 .rail-spacer { flex: 1; }
 
 /* Sidebar */
-.sidebar { display: flex; flex-direction: column; background: var(--sidebar-bg); border-right: 1px solid var(--border); min-width: 0; overflow: hidden; }
+.sidebar {
+  display: flex; flex-direction: column;
+  background: var(--sidebar-bg);
+  min-width: 0; overflow: hidden; min-height: 0;
+  border-radius: var(--float-radius);
+  border: 1px solid var(--border);
+  box-shadow: var(--float-shadow);
+}
 .sidebar-head { display: flex; align-items: center; gap: .5rem; padding: .85rem 1rem; border-bottom: 1px solid var(--border); min-height: 52px; }
 .sidebar-title { flex: 1; font-weight: 700; font-size: .95rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-body {
@@ -224,16 +243,16 @@ input:focus, .modal-input:focus { outline: none; border-color: var(--accent); bo
 /* Sol alt yüzen panel (rail + kanal listesi üzerinde) */
 .sidebar-footer {
   position: absolute;
-  left: 8px;
-  bottom: calc(8px + var(--safe-b));
-  width: calc(var(--rail-w) + var(--sidebar-w) - 16px);
+  left: var(--float-gap);
+  bottom: calc(var(--float-gap) + var(--safe-b));
+  width: calc(var(--rail-w) + var(--float-gap) + var(--sidebar-w));
   z-index: 48;
   display: flex;
   flex-direction: column;
-  border-radius: 14px;
+  border-radius: var(--float-radius);
   border: 1px solid var(--border);
   background: var(--bg-2);
-  box-shadow: 0 10px 28px rgba(0, 0, 0, .38);
+  box-shadow: var(--float-shadow);
   overflow: hidden;
   backdrop-filter: blur(10px);
 }
@@ -336,13 +355,17 @@ html[data-theme="light"] .voice-conn { background: #e8ebf2; }
 .workspace {
   display: flex; flex-direction: column;
   min-width: 0; min-height: 0; overflow: hidden;
-  background: var(--bg);
+  background: transparent;
+  gap: var(--float-gap);
 }
 .workspace-head {
   flex: 0 0 auto;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg);
+  background: var(--sidebar-bg);
   min-height: 52px;
+  border-radius: var(--float-radius);
+  border: 1px solid var(--border);
+  box-shadow: var(--float-shadow);
+  overflow: hidden;
 }
 .workspace-head .view-head {
   min-height: 52px;
@@ -350,21 +373,29 @@ html[data-theme="light"] .voice-conn { background: #e8ebf2; }
 }
 .workspace-body {
   display: flex; flex: 1; min-height: 0; min-width: 0;
+  gap: var(--float-gap);
 }
 .main {
   flex: 1; min-width: 0; min-height: 0;
   display: flex; flex-direction: column;
-  background: var(--bg);
+  background: transparent;
 }
 
 /* Right panel (members / DM profile / active now) */
 .panel {
   width: var(--panel-w); flex: 0 0 var(--panel-w);
-  background: var(--sidebar-bg); border-left: 1px solid var(--border);
+  background: transparent;
   display: flex; flex-direction: column; min-width: 0; overflow: hidden;
 }
 .app:not(.with-panel) .panel { display: none; }
-.panel > div { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.panel > div {
+  display: flex; flex-direction: column; min-height: 0; flex: 1;
+  border-radius: var(--float-radius);
+  border: 1px solid var(--border);
+  background: var(--sidebar-bg);
+  box-shadow: var(--float-shadow);
+  overflow: hidden;
+}
 .panel-section-title {
   padding: .85rem 1rem .35rem;
   font-size: .7rem; font-weight: 700; text-transform: uppercase;
@@ -418,22 +449,23 @@ html[data-theme="light"] .voice-conn { background: #e8ebf2; }
 .member-status { position: absolute; right: -2px; bottom: -2px; width: 11px; height: 11px; border-radius: 50%; background: #6b7280; border: 2px solid var(--sidebar-bg); }
 .member-status.on { background: var(--online); }
 
-/* DM profile — yüzen kart */
+/* DM profile — yüzen kart (panel > div zaten yüzer; iç kart border’sız doldurur) */
 .panel.panel--profile {
   --panel-w: 340px;
-  background: transparent;
-  border-left: 0;
 }
-#panel-profile { padding: 10px 10px 10px 2px; overflow-y: auto; scrollbar-width: thin; }
+#panel-profile {
+  overflow-y: auto; scrollbar-width: thin;
+  border: 0; box-shadow: none; background: transparent;
+}
 .profile-panel-card {
   display: flex; flex-direction: column;
-  border-radius: 16px;
+  border-radius: var(--float-radius);
   border: 1px solid var(--border);
   background: var(--sidebar-bg);
-  box-shadow: 0 10px 28px rgba(0, 0, 0, .38);
+  box-shadow: var(--float-shadow);
   overflow: hidden;
   flex: 0 0 auto;
-  min-height: calc(100% - 2px);
+  min-height: 100%;
 }
 .profile-banner {
   position: relative;
@@ -708,14 +740,26 @@ html[data-theme="light"] .voice-conn { background: #e8ebf2; }
   color: var(--muted);
   margin-left: .35rem;
 }
-.chat-input { display: flex; gap: .5rem; padding: .75rem 1rem; border-top: 1px solid var(--border); flex: 0 0 auto; }
-.chat-input input { flex: 1; }
+.chat-input {
+  display: flex; gap: .5rem;
+  margin: 0 var(--float-gap) var(--float-gap);
+  padding: .65rem .85rem;
+  flex: 0 0 auto;
+  border-radius: var(--float-radius);
+  border: 1px solid var(--border);
+  background: var(--sidebar-bg);
+  box-shadow: var(--float-shadow);
+}
+.chat-input input { flex: 1; border: 0; background: transparent; padding-left: .35rem; }
+.chat-input input:focus { box-shadow: none; }
 
 .dm-blocked-bar {
   display: flex; align-items: center; justify-content: space-between; gap: .75rem;
-  margin: .75rem 1rem; padding: .7rem .9rem;
-  border: 1px solid var(--border); border-radius: 10px;
-  background: var(--surface); color: var(--muted); font-size: .88rem;
+  margin: 0 var(--float-gap) var(--float-gap);
+  padding: .7rem .9rem;
+  border: 1px solid var(--border); border-radius: var(--float-radius);
+  background: var(--sidebar-bg); color: var(--muted); font-size: .88rem;
+  box-shadow: var(--float-shadow);
 }
 .dm-blocked-bar .btn { flex: 0 0 auto; white-space: nowrap; font-size: .82rem; padding: .35rem .7rem; }
 
@@ -994,23 +1038,45 @@ html[data-theme="light"] .voice-conn { background: #e8ebf2; }
 .scrim { display: none; position: fixed; inset: 0; z-index: 35; background: rgba(0,0,0,.45); opacity: 0; transition: opacity var(--dur) var(--ease); }
 
 @media (max-width: 768px) {
-  .app { grid-template-columns: 1fr; }
-  .rail { position: fixed; left: 0; top: 0; bottom: 0; z-index: 45; transform: translateX(-100%); transition: transform var(--dur) var(--ease); }
-  .sidebar { position: fixed; left: var(--rail-w); top: 0; bottom: 0; width: var(--sidebar-w); max-width: calc(100vw - var(--rail-w)); z-index: 44; transform: translateX(calc(-100% - var(--rail-w))); transition: transform var(--dur) var(--ease); }
-  .sidebar-footer {
+  .app {
+    grid-template-columns: 1fr;
+    gap: 0;
+    padding: var(--float-gap);
+  }
+  .rail {
     position: fixed;
-    left: 8px;
-    width: calc(var(--rail-w) + min(var(--sidebar-w), calc(100vw - var(--rail-w))) - 16px);
-    z-index: 47;
-    transform: translateX(calc(-100% - 16px));
+    left: var(--float-gap); top: var(--float-gap); bottom: var(--float-gap);
+    z-index: 45;
+    transform: translateX(calc(-100% - var(--float-gap) * 2));
     transition: transform var(--dur) var(--ease);
   }
-  .workspace { grid-column: 1; }
-  .workspace-body { position: relative; }
+  .sidebar {
+    position: fixed;
+    left: calc(var(--float-gap) + var(--rail-w) + var(--float-gap));
+    top: var(--float-gap); bottom: var(--float-gap);
+    width: var(--sidebar-w);
+    max-width: calc(100vw - var(--rail-w) - var(--float-gap) * 3);
+    z-index: 44;
+    transform: translateX(calc(-100% - var(--rail-w) - var(--float-gap) * 3));
+    transition: transform var(--dur) var(--ease);
+  }
+  .sidebar-footer {
+    position: fixed;
+    left: var(--float-gap);
+    width: calc(var(--rail-w) + var(--float-gap) + min(var(--sidebar-w), calc(100vw - var(--rail-w) - var(--float-gap) * 3)));
+    z-index: 47;
+    transform: translateX(calc(-100% - var(--float-gap) * 2));
+    transition: transform var(--dur) var(--ease);
+  }
+  .workspace { grid-column: 1; gap: var(--float-gap); }
+  .workspace-body { position: relative; gap: 0; }
   .app.with-panel .panel {
-    display: flex; position: fixed; right: 0; top: 0; bottom: 0;
-    width: min(var(--panel-w), 82vw); z-index: 46;
-    transform: translateX(100%); transition: transform var(--dur) var(--ease);
+    display: flex; position: fixed;
+    right: var(--float-gap); top: var(--float-gap); bottom: var(--float-gap);
+    width: min(var(--panel-w), calc(82vw - var(--float-gap)));
+    z-index: 46;
+    transform: translateX(calc(100% + var(--float-gap) * 2));
+    transition: transform var(--dur) var(--ease);
   }
 
   /* Sol drawer açık: rail + sidebar + yüzen panel birlikte */
