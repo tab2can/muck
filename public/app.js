@@ -1,4 +1,4 @@
-import * as muckCache from './muck-cache.js';
+import * as msgStore from './message-store.js';
 
 const $ = (id) => document.getElementById(id);
 const THEME_COLORS = { dark: '#0f1117', black: '#000000', light: '#f3f5f9' };
@@ -93,109 +93,12 @@ let chatHistoryExpanded = false;
 let dmHistoryExpanded = false;
 /** Manuel "okunmadı işaretle" — social-update rozeti silmesin */
 let keepUnreadBadge = false;
-/** Stale open-dm / get-dm cevaplarını yoksay */
-let dmOpenSeq = 0;
-let chatOpenSeq = 0;
-/** Yükleme sırasında gelen canlı mesajlar (kanal kapatılana kadar) */
-const pendingLiveDm = new Map();
-const pendingLiveChan = new Map();
 /** Oturum içi okundu işareti — YENİ ayıracı */
 const sessionLastRead = new Map();
-/** Geçmiş yükleme tetikleyicisi: 15., 45., 75. mesaj */
-let nextDmHistoryTrigger = muckCache.HISTORY_TRIGGER_INDEX;
-let nextChatHistoryTrigger = muckCache.HISTORY_TRIGGER_INDEX;
-
-function resetDmHistoryTrigger() {
-  nextDmHistoryTrigger = muckCache.HISTORY_TRIGGER_INDEX;
-}
-function resetChatHistoryTrigger() {
-  nextChatHistoryTrigger = muckCache.HISTORY_TRIGGER_INDEX;
-}
-
-function maybeLoadOlderDm(indexFromTop) {
-  if (indexFromTop !== nextDmHistoryTrigger) return;
-  if (!dmHasMore || loadingOlderMsgs || activeView !== 'dm') return;
-  nextDmHistoryTrigger += muckCache.HISTORY_CHUNK;
-  loadOlderDmMessages();
-}
-
-function maybeLoadOlderChat(indexFromTop) {
-  if (indexFromTop !== nextChatHistoryTrigger) return;
-  if (!chatHasMore || loadingOlderMsgs || activeView !== 'chat') return;
-  nextChatHistoryTrigger += muckCache.HISTORY_CHUNK;
-  loadOlderChatMessages();
-}
-
-function checkVisibleHistoryTriggers(container, kind) {
-  const msgs = [...container.querySelectorAll('.msg[data-msg-id]')];
-  if (!msgs.length) return;
-  const cRect = container.getBoundingClientRect();
-  const trigger = kind === 'chan' ? nextChatHistoryTrigger : nextDmHistoryTrigger;
-  if (trigger >= msgs.length) return;
-  const el = msgs[trigger];
-  const r = el.getBoundingClientRect();
-  const visible = r.bottom >= cRect.top && r.top <= cRect.bottom;
-  if (!visible) return;
-  if (kind === 'chan') maybeLoadOlderChat(trigger);
-  else maybeLoadOlderDm(trigger);
-}
-
-function bindMessageScrollLoad(container, kind) {
-  if (!container) return;
-  const key = kind === 'chan' ? 'historyScrollChan' : 'historyScrollDm';
-  if (container.dataset[key] === '1') return;
-  container.dataset[key] = '1';
-  let ticking = false;
-  container.addEventListener('scroll', () => {
-    if (ticking) return;
-    ticking = true;
-    requestAnimationFrame(() => {
-      ticking = false;
-      checkVisibleHistoryTriggers(container, kind);
-    });
-  }, { passive: true });
-  requestAnimationFrame(() => checkVisibleHistoryTriggers(container, kind));
-}
 
 function setDmViewing(channelId) {
   if (!socket?.connected) return;
   socket.emit('dm-viewing', { channelId: channelId || null });
-}
-
-function sortMsgsByTs(list) {
-  return (list || []).slice().sort((a, b) => {
-    const ta = Number(a.ts || 0);
-    const tb = Number(b.ts || 0);
-    if (ta !== tb) return ta - tb;
-    return String(a.id).localeCompare(String(b.id));
-  });
-}
-
-function queueLiveDm(channelId, message) {
-  if (!channelId || !message?.id) return;
-  let buf = pendingLiveDm.get(channelId);
-  if (!buf) { buf = []; pendingLiveDm.set(channelId, buf); }
-  if (!buf.some((m) => String(m.id) === String(message.id))) buf.push(message);
-}
-
-function mergeServerAndLive(serverMsgs, channelId, kind = 'dm') {
-  const pending = kind === 'dm' ? pendingLiveDm : pendingLiveChan;
-  const live = pending.get(channelId) || [];
-  pending.delete(channelId);
-  const byId = new Map();
-  for (const m of serverMsgs || []) byId.set(String(m.id), m);
-  for (const m of live) {
-    const id = String(m.id);
-    if (!byId.has(id)) byId.set(id, m);
-  }
-  return sortMsgsByTs([...byId.values()]);
-}
-
-function queueLiveChan(channelId, message) {
-  if (!channelId || !message?.id) return;
-  let buf = pendingLiveChan.get(channelId);
-  if (!buf) { buf = []; pendingLiveChan.set(channelId, buf); }
-  if (!buf.some((m) => String(m.id) === String(message.id))) buf.push(message);
 }
 
 function showMessagesLoading(container, label = 'Mesajlar yükleniyor…') {
@@ -203,6 +106,17 @@ function showMessagesLoading(container, label = 'Mesajlar yükleniyor…') {
     <div class="msg-history-spinner"></div>
     <span>${escapeHtml(label)}</span>
   </div>`;
+}
+
+/** Discord: üst kenara gelince eski mesaj yükle */
+function bindMessageScrollLoad(container, kind) {
+  if (!container || container.dataset.historyScroll === '1') return;
+  container.dataset.historyScroll = '1';
+  container.addEventListener('scroll', () => {
+    if (container.scrollTop > 80) return;
+    if (kind === 'chan') loadOlderChatMessages();
+    else loadOlderDmMessages();
+  }, { passive: true });
 }
 
 
@@ -546,8 +460,8 @@ function renderProfile() {
   };
 
   // Önce önbellek — sonra arka planda tazele
-  applyDetails(profilePanelCache[friend.id] || muckCache.getCachedProfile(friend.id));
-  if (!profilePanelCache[friend.id] && !muckCache.getCachedProfile(friend.id)) {
+  applyDetails(profilePanelCache[friend.id] || msgStore.getCachedProfile(friend.id));
+  if (!profilePanelCache[friend.id] && !msgStore.getCachedProfile(friend.id)) {
     const mutualsEl = $('profile-mutuals');
     if (mutualsEl) mutualsEl.textContent = '';
     if ($('profile-member-since')) $('profile-member-since').textContent = '—';
@@ -555,7 +469,7 @@ function renderProfile() {
   socket?.emit('get-profile', { userId: friend.id }, (res) => {
     if (res?.error) return;
     profilePanelCache[friend.id] = res;
-    muckCache.saveProfile(friend.id, res);
+    msgStore.saveProfile(friend.id, res);
     applyDetails(res);
   });
 }
@@ -1533,7 +1447,7 @@ function openUserPopout(userId, rect) {
   el.dataset.userId = String(userId);
 
   // Anında önbellekten göster
-  const cached = profilePanelCache[userId] || muckCache.getCachedProfile(userId);
+  const cached = profilePanelCache[userId] || msgStore.getCachedProfile(userId);
   if (cached?.user) {
     profileTarget = cached;
     renderUserPopout(cached);
@@ -1557,7 +1471,7 @@ function openUserPopout(userId, rect) {
     }
     if (el.dataset.userId !== String(userId)) return;
     profilePanelCache[userId] = res;
-    muckCache.saveProfile(userId, res);
+    msgStore.saveProfile(userId, res);
     profileTarget = res;
     renderUserPopout(res);
     placeUserPopout(rect || el.getBoundingClientRect());
@@ -1589,7 +1503,7 @@ function renderUserPopout(p) {
 
 function fetchDmHeaderProfile(friendId) {
   if (!friendId) return;
-  const cached = muckCache.getCachedProfile(friendId);
+  const cached = msgStore.getCachedProfile(friendId);
   if (cached && activeDmFriendId === friendId) {
     dmHeaderProfile = cached;
     renderDmStartHeader();
@@ -1598,7 +1512,7 @@ function fetchDmHeaderProfile(friendId) {
   socket.emit('get-profile', { userId: friendId }, (res) => {
     if (res?.error || activeDmFriendId !== friendId) return;
     dmHeaderProfile = res;
-    muckCache.saveProfile(friendId, res);
+    msgStore.saveProfile(friendId, res);
     renderDmStartHeader();
   });
 }
@@ -1815,7 +1729,6 @@ function appendResolvedMessage(container, msg, resolve) {
     container.appendChild(makeMsgEl(meta.author, meta.text, meta.ts, meta.id, { ...meta, compact }));
   }
   container.scrollTop = container.scrollHeight;
-  requestAnimationFrame(() => checkVisibleHistoryTriggers(container, container.id === 'chat-messages' ? 'chan' : 'dm'));
 }
 
 function localMsgId() {
@@ -1957,7 +1870,6 @@ function prependMessageList(container, messages, resolve) {
     nextExisting.remove();
   }
   container.scrollTop = prevTop + (container.scrollHeight - prevHeight);
-  requestAnimationFrame(() => checkVisibleHistoryTriggers(container, container.id === 'chat-messages' ? 'chan' : 'dm'));
 }
 
 function applyReactionsToEl(el, channelId, messageId, reactions, reactEvent) {
@@ -2402,14 +2314,13 @@ function resolveDmMsg(msg, friendId) {
 }
 
 function openTextChannel(channelId, name, push = true) {
-  const seq = ++chatOpenSeq;
+  const seq = msgStore.nextOpenSeq('chan');
   activeChannelId = channelId;
   activeDmFriendId = null;
   activeDmChannelId = null;
   setDmViewing(null);
   loadingOlderMsgs = false;
   chatHistoryExpanded = false;
-  resetChatHistoryTrigger();
   dmPanelMode = null;
   dmFeatures?.closeSearchPanel?.();
   dmFeatures?.closePinsPanel?.();
@@ -2419,7 +2330,7 @@ function openTextChannel(channelId, name, push = true) {
   renderChannels();
 
   const container = $('chat-messages');
-  const cached = muckCache.getCachedMessages('chan', channelId);
+  const cached = msgStore.getCached('chan', channelId);
   let showedLoading = false;
   if (cached?.messages?.length) {
     chatHasMore = cached.hasMore !== false;
@@ -2433,7 +2344,8 @@ function openTextChannel(channelId, name, push = true) {
   }
 
   socket.emit('open-text-channel', { channelId }, (res) => {
-    if (res.error) {
+    if (!msgStore.isOpenSeqCurrent('chan', seq) || activeChannelId !== channelId) return;
+    if (res?.error) {
       if (showedLoading) {
         container.innerHTML = '';
         ensureHistoryLoader(container);
@@ -2441,13 +2353,12 @@ function openTextChannel(channelId, name, push = true) {
       }
       return;
     }
-    if (seq !== chatOpenSeq || activeChannelId !== channelId) return;
     dmPins = res.pins || [];
     chatHasMore = !!res.hasMore;
-    const merged = mergeServerAndLive(res.messages || [], channelId, 'chan');
-    muckCache.saveMessages('chan', channelId, merged, res.hasMore);
-    if (showedLoading || !muckCache.sameMessageTail(cached?.messages, merged)) {
-      renderMessageList(container, merged, resolveChannelMsg);
+    const serverMsgs = res.messages || [];
+    msgStore.saveMessages('chan', channelId, serverMsgs, res.hasMore);
+    if (showedLoading || !msgStore.sameTail(cached?.messages, serverMsgs)) {
+      renderMessageList(container, serverMsgs, resolveChannelMsg);
       const prevRead = getLastRead('chan', channelId);
       if (prevRead) insertUnreadDivider(container, prevRead);
     }
@@ -2528,7 +2439,7 @@ $('chat-form').addEventListener('submit', (e) => {
     }
     if (res?.message) {
       appendMessage($('chat-messages'), res.message);
-      muckCache.appendMessage('chan', activeChannelId, res.message);
+      msgStore.appendLive('chan', activeChannelId, res.message);
     }
   });
 });
@@ -2539,22 +2450,21 @@ function renderDMMessages(messages, friendId) {
   renderDmStartHeader();
 }
 
-function resolveDmCacheForOpen(friendId, channelId) {
-  if (channelId) {
-    const entry = muckCache.getCachedMessages('dm', channelId);
-    if (entry?.messages?.length) return { channelId: String(channelId), cached: entry };
+function paintDmFromServer({ container, cached, showedLoading, prevRead, friendId, channelId, messages, hasMore }) {
+  const serverMsgs = messages || [];
+  msgStore.saveMessages('dm', channelId, serverMsgs, hasMore, { friendId: friendId || null });
+  dmHasMore = !!hasMore;
+  if (showedLoading || !msgStore.sameTail(cached?.messages, serverMsgs)) {
+    renderDMMessages(serverMsgs, friendId || null);
+    const dividerTs = prevRead || getLastRead('dm', channelId);
+    if (dividerTs) insertUnreadDivider(container, dividerTs);
   }
-  const byFriend = muckCache.getCachedDmByFriend(friendId);
-  if (byFriend.entry?.messages?.length) {
-    return { channelId: byFriend.channelId, cached: byFriend.entry };
-  }
-  return { channelId: channelId || byFriend.channelId || null, cached: null };
 }
 
 function openDM(friendId, push = true) {
   const friend = friends.find((f) => f.id === friendId);
   if (!friend) return;
-  const seq = ++dmOpenSeq;
+  const seq = msgStore.nextOpenSeq('dm');
   activeServer = null;
   activeDmFriendId = friendId;
   activeGroupId = null;
@@ -2563,7 +2473,6 @@ function openDM(friendId, push = true) {
   loadingOlderMsgs = false;
   keepUnreadBadge = false;
   dmHistoryExpanded = false;
-  resetDmHistoryTrigger();
   friend.unread = false;
   friend.closed = false;
   showSidebarHome();
@@ -2573,8 +2482,9 @@ function openDM(friendId, push = true) {
   dmFeatures?.closePinsPanel?.();
   dmFeatures?.updateCallStage?.(friend.username);
 
-  const { channelId: cacheChannelId, cached } = resolveDmCacheForOpen(friendId, friend.dmChannelId);
-  activeDmChannelId = cacheChannelId;
+  const resolved = msgStore.resolveDmCache(friendId, friend.dmChannelId);
+  activeDmChannelId = resolved.channelId;
+  const cached = resolved.cached;
   setDmViewing(activeDmChannelId);
   setMainView('dm');
   updateDmComposer();
@@ -2601,9 +2511,9 @@ function openDM(friendId, push = true) {
   }
 
   socket.emit('open-dm', { friendId }, (res) => {
-    if (seq !== dmOpenSeq || activeDmFriendId !== friendId) return;
+    if (!msgStore.isOpenSeqCurrent('dm', seq) || activeDmFriendId !== friendId) return;
     if (res?.error) {
-      if (showedLoading && !cached?.messages?.length) {
+      if (showedLoading) {
         container.innerHTML = '';
         ensureHistoryLoader(container);
         toast(res.error);
@@ -2611,14 +2521,12 @@ function openDM(friendId, push = true) {
       return;
     }
     activeDmChannelId = res.dmChannelId;
-    muckCache.linkFriendToDmChannel(friendId, res.dmChannelId);
+    msgStore.linkFriendChannel(friendId, res.dmChannelId);
     setDmViewing(res.dmChannelId);
-    if (friend) {
-      friend.blocked = !!res.blockedByMe;
-      friend.blockedByThem = !!res.blockedByThem;
-      friend.dmChannelId = res.dmChannelId;
-      friend.unread = false;
-    }
+    friend.blocked = !!res.blockedByMe;
+    friend.blockedByThem = !!res.blockedByThem;
+    friend.dmChannelId = res.dmChannelId;
+    friend.unread = false;
     restoreDmCallStageIfNeeded();
     applyActiveCallState(res.activeCall, res.dmChannelId, res.messages || []);
     dmPins = res.pins || [];
@@ -2627,23 +2535,29 @@ function openDM(friendId, push = true) {
       if (social.unreadDms) delete social.unreadDms[friendId];
     }
     updateDmComposer();
-    dmHasMore = !!res.hasMore;
-    const merged = mergeServerAndLive(res.messages || [], res.dmChannelId, 'dm');
-    muckCache.saveMessages('dm', res.dmChannelId, merged, res.hasMore, { friendId });
-    if (showedLoading || !muckCache.sameMessageTail(cached?.messages, merged)) {
-      renderDMMessages(merged, friendId);
-      const dividerTs = prevRead || getLastRead('dm', res.dmChannelId);
-      if (dividerTs) insertUnreadDivider(container, dividerTs);
-    }
+    paintDmFromServer({
+      container, cached, showedLoading, prevRead, friendId,
+      channelId: res.dmChannelId, messages: res.messages, hasMore: res.hasMore,
+    });
     setLastRead('dm', res.dmChannelId, Date.now());
     if (push) navTo(`/channels/@me/${res.dmChannelId}`);
   });
   closeDrawers();
 }
 
+function applyDmChannelMeta(res) {
+  if (res.channel) {
+    const idx = groupDms.findIndex((g) => g.id === res.channel.id);
+    if (idx >= 0) groupDms[idx] = { ...groupDms[idx], ...res.channel };
+    else groupDms.push(res.channel);
+  }
+  dmPins = res.pins || [];
+  if (res.social) social = res.social;
+}
+
 function openGroupChannel(channel, push = true) {
   if (!channel?.id) return;
-  const seq = ++dmOpenSeq;
+  const seq = msgStore.nextOpenSeq('dm');
   activeServer = null;
   activeDmFriendId = null;
   activeGroupId = channel.id;
@@ -2655,7 +2569,6 @@ function openGroupChannel(channel, push = true) {
   activeChannelId = null;
   loadingOlderMsgs = false;
   dmHistoryExpanded = false;
-  resetDmHistoryTrigger();
   showSidebarHome();
   setRailActive('home');
   $('dm-title').textContent = activeGroupTitle;
@@ -2666,12 +2579,11 @@ function openGroupChannel(channel, push = true) {
   updateDmComposer();
   renderFriends();
   restoreDmCallStageIfNeeded();
-
   if (push) navTo(`/channels/@me/${channel.id}`);
 
   const container = $('dm-messages');
   const prevRead = getLastRead('dm', channel.id);
-  const cached = muckCache.getCachedMessages('dm', channel.id);
+  const cached = msgStore.getCached('dm', channel.id);
   let showedLoading = false;
   if (cached?.messages?.length) {
     dmHasMore = cached.hasMore !== false;
@@ -2684,7 +2596,8 @@ function openGroupChannel(channel, push = true) {
   }
 
   socket.emit('get-dm-by-channel', { dmChannelId: channel.id }, (res) => {
-    if (res.error) {
+    if (!msgStore.isOpenSeqCurrent('dm', seq) || activeGroupId !== channel.id) return;
+    if (res?.error) {
       if (showedLoading) {
         container.innerHTML = '';
         ensureHistoryLoader(container);
@@ -2692,26 +2605,16 @@ function openGroupChannel(channel, push = true) {
       }
       return;
     }
-    if (seq !== dmOpenSeq || activeGroupId !== channel.id) return;
+    applyDmChannelMeta(res);
     if (res.channel) {
-      const idx = groupDms.findIndex((g) => g.id === res.channel.id);
-      if (idx >= 0) groupDms[idx] = { ...groupDms[idx], ...res.channel };
-      else groupDms.push(res.channel);
       activeGroupTitle = res.channel.name || res.channel.title || activeGroupTitle;
       $('dm-title').textContent = activeGroupTitle;
     }
-    dmPins = res.pins || [];
-    if (res.social) {
-      social = res.social;
-      if (social.unreadGroups) delete social.unreadGroups[channel.id];
-    }
-    dmHasMore = !!res.hasMore;
-    const merged = mergeServerAndLive(res.messages || [], channel.id, 'dm');
-    muckCache.saveMessages('dm', channel.id, merged, res.hasMore);
-    if (showedLoading || !muckCache.sameMessageTail(cached?.messages, merged)) {
-      renderDMMessages(merged, null);
-      if (prevRead) insertUnreadDivider(container, prevRead);
-    }
+    if (social.unreadGroups) delete social.unreadGroups[channel.id];
+    paintDmFromServer({
+      container, cached, showedLoading, prevRead, friendId: null,
+      channelId: channel.id, messages: res.messages, hasMore: res.hasMore,
+    });
     setLastRead('dm', channel.id, Date.now());
     applyActiveCallState(res.activeCall, channel.id, res.messages || []);
     updatePanel();
@@ -2719,13 +2622,13 @@ function openGroupChannel(channel, push = true) {
   closeDrawers();
 }
 
+/** Tek fetch — grup ise UI state ayarla, ikinci openGroupChannel çağırma */
 function openDMByChannel(dmChannelId, push = false) {
-  const seq = ++dmOpenSeq;
+  const seq = msgStore.nextOpenSeq('dm');
   activeServer = null;
   activeChannelId = null;
   activeDmChannelId = dmChannelId;
   keepUnreadBadge = false;
-  resetDmHistoryTrigger();
   setDmViewing(dmChannelId);
   if (push) navTo(`/channels/@me/${dmChannelId}`);
   if (dmIncoming?.channelId === dmChannelId) syncIncomingDmCallUi();
@@ -2733,7 +2636,7 @@ function openDMByChannel(dmChannelId, push = false) {
   setMainView('dm');
   const container = $('dm-messages');
   const prevRead = getLastRead('dm', dmChannelId);
-  const cached = muckCache.getCachedMessages('dm', dmChannelId);
+  const cached = msgStore.getCached('dm', dmChannelId);
   let showedLoading = false;
   if (cached?.messages?.length) {
     dmHasMore = cached.hasMore !== false;
@@ -2747,23 +2650,50 @@ function openDMByChannel(dmChannelId, push = false) {
   }
 
   socket.emit('get-dm-by-channel', { dmChannelId }, (res) => {
-    if (res.error) { toast(res.error); goHome(false); navTo('/channels/@me'); return; }
-    if (seq !== dmOpenSeq) return;
-    if (res.type === 'group' || res.channel?.type === 'group') {
-      openGroupChannel(res.channel || { id: dmChannelId }, push);
+    if (!msgStore.isOpenSeqCurrent('dm', seq)) return;
+    if (res?.error) {
+      toast(res.error);
+      goHome(false);
+      navTo('/channels/@me');
       return;
     }
+
+    const isGroup = res.type === 'group' || res.channel?.type === 'group';
+    applyDmChannelMeta(res);
+
+    if (isGroup) {
+      const ch = res.channel || { id: dmChannelId };
+      activeGroupId = ch.id;
+      activeDmFriendId = null;
+      activeGroupTitle = ch.name || ch.title || 'Grup';
+      activeDmChannelId = ch.id;
+      $('dm-title').textContent = activeGroupTitle;
+      dmFeatures?.updateCallStage?.(activeGroupTitle);
+      if (social.unreadGroups) delete social.unreadGroups[ch.id];
+      showSidebarHome();
+      setRailActive('home');
+      renderFriends();
+      updateDmComposer();
+      paintDmFromServer({
+        container, cached, showedLoading, prevRead, friendId: null,
+        channelId: ch.id, messages: res.messages, hasMore: res.hasMore,
+      });
+      setLastRead('dm', ch.id, Date.now());
+      applyActiveCallState(res.activeCall, ch.id, res.messages || []);
+      updatePanel();
+      if (push) navTo(`/channels/@me/${ch.id}`);
+      closeDrawers();
+      return;
+    }
+
     activeGroupId = null;
     activeDmFriendId = res.friendId;
     activeDmChannelId = res.dmChannelId;
-    muckCache.linkFriendToDmChannel(res.friendId, res.dmChannelId);
+    msgStore.linkFriendChannel(res.friendId, res.dmChannelId);
     setDmViewing(res.dmChannelId);
     loadingOlderMsgs = false;
     dmHistoryExpanded = false;
-    if (res.social) {
-      social = res.social;
-      if (social.unreadDms) delete social.unreadDms[res.friendId];
-    }
+    if (social.unreadDms) delete social.unreadDms[res.friendId];
     const friend = friends.find((f) => f.id === res.friendId);
     if (friend) {
       friend.blocked = !!res.blockedByMe;
@@ -2781,15 +2711,10 @@ function openDMByChannel(dmChannelId, push = false) {
     fetchDmHeaderProfile(res.friendId);
     restoreDmCallStageIfNeeded();
     applyActiveCallState(res.activeCall, res.dmChannelId, res.messages || []);
-    dmPins = res.pins || [];
-    dmHasMore = !!res.hasMore;
-    const merged = mergeServerAndLive(res.messages || [], res.dmChannelId, 'dm');
-    muckCache.saveMessages('dm', res.dmChannelId, merged, res.hasMore, { friendId: res.friendId });
-    if (showedLoading || !muckCache.sameMessageTail(cached?.messages, merged)) {
-      renderDMMessages(merged, res.friendId);
-      const dividerTs = prevRead || getLastRead('dm', res.dmChannelId);
-      if (dividerTs) insertUnreadDivider(container, dividerTs);
-    }
+    paintDmFromServer({
+      container, cached, showedLoading, prevRead, friendId: res.friendId,
+      channelId: res.dmChannelId, messages: res.messages, hasMore: res.hasMore,
+    });
     setLastRead('dm', res.dmChannelId, Date.now());
     if (push) navTo(`/channels/@me/${res.dmChannelId}`);
     closeDrawers();
@@ -2833,7 +2758,7 @@ $('dm-form').addEventListener('submit', (e) => {
       }
       if (res.message) {
         appendResolvedMessage($('dm-messages'), res.message, resolve);
-        muckCache.appendMessage('dm', activeGroupId, res.message);
+        msgStore.appendLive('dm', activeGroupId, res.message);
       }
     });
     return;
@@ -2859,7 +2784,7 @@ $('dm-form').addEventListener('submit', (e) => {
     if (res.message) {
       appendResolvedMessage($('dm-messages'), res.message, resolve);
       const cid = activeDmChannelId || activeGroupId;
-      if (cid) muckCache.appendMessage('dm', cid, res.message, { friendId: activeDmFriendId });
+      if (cid) msgStore.appendLive('dm', cid, res.message, { friendId: activeDmFriendId });
     }
   });
 });
@@ -3789,7 +3714,7 @@ function confirmRemoveFriend(friend) {
 
 function openUserProfile(userId) {
   if (!socket) return;
-  const cached = profilePanelCache[userId] || muckCache.getCachedProfile(userId);
+  const cached = profilePanelCache[userId] || msgStore.getCachedProfile(userId);
   if (cached?.user) {
     profileTarget = cached;
     profileMutualTab = 'friends';
@@ -3799,7 +3724,7 @@ function openUserProfile(userId) {
   socket.emit('get-profile', { userId }, (res) => {
     if (res?.error) { toast(res.error); return; }
     profilePanelCache[userId] = res;
-    muckCache.saveProfile(userId, res);
+    msgStore.saveProfile(userId, res);
     profileTarget = res;
     profileMutualTab = 'friends';
     renderProfileModal();
@@ -4044,9 +3969,9 @@ function connectSocket(token) {
   });
 
   socket.on('init', async ({ user, friends: fr, friendRequests: frReq, servers: srv, social: soc, friendsVoice: fv, groupDms: gd }) => {
-    muckCache.setCacheUser(user.id);
-    muckCache.hydrateFromStorage(user.id);
-    muckCache.hydrateProfilesTo(profilePanelCache);
+    msgStore.setUser(user.id);
+    msgStore.hydrate(user.id);
+    msgStore.hydrateProfilesTo(profilePanelCache);
     currentUser = user;
     friends = fr || [];
     friendRequests = frReq || { incoming: [], outgoing: [] };
@@ -4054,9 +3979,6 @@ function connectSocket(token) {
     friendsVoice = fv || {};
     groupDms = gd || [];
     servers = srv;
-
-    setSplashStatus('Mesajlar güncelleniyor…');
-    await muckCache.syncAllWithServer(socket, { friends, groupDms });
 
     setSplashStatus('Arayüz hazırlanıyor…');
     $('user-name').textContent = user.username;
@@ -4127,7 +4049,7 @@ function connectSocket(token) {
     socket.emit('get-profile', { userId }, (res) => {
       if (res?.error) return;
       profilePanelCache[userId] = res;
-      muckCache.saveProfile(userId, res);
+      msgStore.saveProfile(userId, res);
       if (profileTarget?.user?.id === userId) profileTarget = res;
       if (activeDmFriendId === userId) {
         dmHeaderProfile = res;
@@ -4158,23 +4080,17 @@ function connectSocket(token) {
   });
 
   socket.on('message', ({ channelId, message }) => {
-    if (channelId) muckCache.appendMessage('chan', channelId, message);
+    if (channelId) msgStore.appendLive('chan', channelId, message);
     if (channelId === activeChannelId && activeView === 'chat') {
-      const container = $('chat-messages');
-      const loading = !container.querySelector('.msg[data-msg-id]')
-        && container.querySelector('.msg-history-loader:not(.hidden)');
-      if (loading) queueLiveChan(channelId, message);
-      else {
-        appendMessage(container, message);
-        setLastRead('chan', channelId, Date.now());
-      }
+      appendMessage($('chat-messages'), message);
+      setLastRead('chan', channelId, Date.now());
     }
   });
 
   socket.on('dm', ({ friendId, username, message, muted, ignored, blocked, channelId, type }) => {
     if (channelId) {
       const fid = type === 'group' ? null : (friendId || activeDmFriendId);
-      muckCache.appendMessage('dm', channelId, message, { friendId: fid });
+      msgStore.appendLive('dm', channelId, message, { friendId: fid });
     }
     const isGroupView = type === 'group' || (channelId && activeGroupId === channelId);
     const isDmView = !isGroupView && activeView === 'dm' && (
@@ -4183,14 +4099,7 @@ function connectSocket(token) {
     );
     if (activeView === 'dm' && (isDmView || (isGroupView && activeGroupId === channelId))) {
       const resolveFriend = activeGroupId ? null : (activeDmFriendId || friendId);
-      const container = $('dm-messages');
-      const loading = !container.querySelector('.msg[data-msg-id]')
-        && container.querySelector('.msg-history-loader:not(.hidden)');
-      if (loading && channelId) {
-        queueLiveDm(channelId, message);
-      } else {
-        appendResolvedMessage(container, message, (m) => resolveDmMsg(m, resolveFriend));
-      }
+      appendResolvedMessage($('dm-messages'), message, (m) => resolveDmMsg(m, resolveFriend));
       if (channelId) setLastRead('dm', channelId, Date.now());
       // Aktif arama sistemi mesajı geldiyse üst paneli de aç
       if (message?.metadata?.type === 'dm_call' && message.metadata.status === 'active') {
@@ -4234,7 +4143,7 @@ function connectSocket(token) {
   });
 
   socket.on('dm-invite-sent', ({ channelId, targetId, message }) => {
-    if (channelId) muckCache.appendMessage('dm', channelId, message);
+    if (channelId) msgStore.appendLive('dm', channelId, message);
     if (activeView !== 'dm' || activeGroupId) return;
     if (activeDmChannelId === channelId || activeDmFriendId === targetId) {
       appendResolvedMessage($('dm-messages'), message, (m) => resolveDmMsg(m, targetId));
@@ -4243,7 +4152,7 @@ function connectSocket(token) {
 
   socket.on('dm-call-log', ({ channelId, message }) => {
     if (!message) return;
-    if (channelId) muckCache.patchMessage('dm', channelId, message.id, message);
+    if (channelId) msgStore.patchMessage('dm', channelId, message.id, message);
     if (channelId === activeDmChannelId && activeView === 'dm') {
       const el = document.querySelector(`.msg[data-msg-id="${CSS.escape(String(message.id))}"]`);
       if (el) applyDmCallLogUpdate(message);
@@ -4280,22 +4189,22 @@ function connectSocket(token) {
   });
 
   socket.on('message-edited', ({ channelId, messageId, text }) => {
-    if (channelId) muckCache.patchMessage('chan', channelId, messageId, { text, edited: true });
+    if (channelId) msgStore.patchMessage('chan', channelId, messageId, { text, edited: true });
     if (channelId === activeChannelId && activeView === 'chat') applyEditToDom(messageId, text);
   });
 
   socket.on('message-deleted', ({ channelId, messageId }) => {
-    if (channelId) muckCache.removeMessage('chan', channelId, messageId);
+    if (channelId) msgStore.removeMessage('chan', channelId, messageId);
     if (channelId === activeChannelId && activeView === 'chat') removeMsgFromDom(messageId);
   });
 
   socket.on('dm-edited', ({ channelId, messageId, text }) => {
-    if (channelId) muckCache.patchMessage('dm', channelId, messageId, { text, edited: true });
+    if (channelId) msgStore.patchMessage('dm', channelId, messageId, { text, edited: true });
     if (channelId === activeDmChannelId && activeView === 'dm') applyEditToDom(messageId, text);
   });
 
   socket.on('dm-deleted', ({ channelId, messageId }) => {
-    if (channelId) muckCache.removeMessage('dm', channelId, messageId);
+    if (channelId) msgStore.removeMessage('dm', channelId, messageId);
     if (channelId === activeDmChannelId && activeView === 'dm') removeMsgFromDom(messageId);
   });
 
@@ -4857,10 +4766,10 @@ if ('serviceWorker' in navigator) {
   startSplashTips();
   loadSettings();
   applySettings();
-  muckCache.purgeLegacyCaches();
+  msgStore.purgeLegacy();
   setSplashStatus('Önbellek yükleniyor…');
-  const cacheStats = muckCache.hydrateFromStorage();
-  muckCache.hydrateProfilesTo(profilePanelCache);
+  const cacheStats = msgStore.hydrate();
+  msgStore.hydrateProfilesTo(profilePanelCache);
   if (cacheStats.dm + cacheStats.chan > 0) {
     setSplashStatus('Sohbet önbelleği hazır…');
   }
