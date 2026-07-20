@@ -101,22 +101,17 @@ function setDmViewing(channelId) {
   socket.emit('dm-viewing', { channelId: channelId || null });
 }
 
-function showMessagesLoading(container, label = 'Mesajlar yükleniyor…') {
+function paintLoading(container) {
   container.innerHTML = `<div class="msg-history-loader" aria-hidden="false">
     <div class="msg-history-spinner"></div>
-    <span>${escapeHtml(label)}</span>
+    <span>Mesajlar yükleniyor…</span>
   </div>`;
 }
 
-/** Discord: üst kenara gelince eski mesaj yükle */
-function bindMessageScrollLoad(container, kind) {
-  if (!container || container.dataset.historyScroll === '1') return;
-  container.dataset.historyScroll = '1';
-  container.addEventListener('scroll', () => {
-    if (container.scrollTop > 80) return;
-    if (kind === 'chan') loadOlderChatMessages();
-    else loadOlderDmMessages();
-  }, { passive: true });
+function emitAck(event, payload) {
+  return new Promise((resolve) => {
+    socket.emit(event, payload, (res) => resolve(res || {}));
+  });
 }
 
 
@@ -460,8 +455,8 @@ function renderProfile() {
   };
 
   // Önce önbellek — sonra arka planda tazele
-  applyDetails(profilePanelCache[friend.id] || msgStore.getCachedProfile(friend.id));
-  if (!profilePanelCache[friend.id] && !msgStore.getCachedProfile(friend.id)) {
+  applyDetails(profilePanelCache[friend.id] || msgStore.getProfile(friend.id));
+  if (!profilePanelCache[friend.id] && !msgStore.getProfile(friend.id)) {
     const mutualsEl = $('profile-mutuals');
     if (mutualsEl) mutualsEl.textContent = '';
     if ($('profile-member-since')) $('profile-member-since').textContent = '—';
@@ -1447,7 +1442,7 @@ function openUserPopout(userId, rect) {
   el.dataset.userId = String(userId);
 
   // Anında önbellekten göster
-  const cached = profilePanelCache[userId] || msgStore.getCachedProfile(userId);
+  const cached = profilePanelCache[userId] || msgStore.getProfile(userId);
   if (cached?.user) {
     profileTarget = cached;
     renderUserPopout(cached);
@@ -1503,7 +1498,7 @@ function renderUserPopout(p) {
 
 function fetchDmHeaderProfile(friendId) {
   if (!friendId) return;
-  const cached = msgStore.getCachedProfile(friendId);
+  const cached = msgStore.getProfile(friendId);
   if (cached && activeDmFriendId === friendId) {
     dmHeaderProfile = cached;
     renderDmStartHeader();
@@ -1816,7 +1811,10 @@ function renderMessageList(container, messages, resolve) {
   const state = { authorId: null, ts: 0, day: null };
   container.appendChild(buildMessagesFragment(messages, resolve, state));
   container.scrollTop = container.scrollHeight;
-  bindMessageScrollLoad(container, container.id === 'chat-messages' ? 'chan' : 'dm');
+  msgStore.bindTopScroll(container, () => {
+    if (container.id === 'chat-messages') loadOlderChatMessages();
+    else loadOlderDmMessages();
+  });
 }
 
 function ensureHistoryLoader(container) {
@@ -2229,45 +2227,53 @@ async function prependOlderForJump(kind, messageId, targetTs) {
 }
 
 function loadOlderChatMessages() {
-  if (loadingOlderMsgs || !chatHasMore || !activeChannelId || activeView !== 'chat') return;
+  if (activeView !== 'chat' || !activeChannelId) return;
   const container = $('chat-messages');
-  const beforeTs = getOldestMessageTs(container);
-  if (!beforeTs) { chatHasMore = false; return; }
-  loadingOlderMsgs = true;
   const loader = ensureHistoryLoader(container);
-  loader.classList.remove('hidden');
-  loader.setAttribute('aria-hidden', 'false');
-  socket.emit('load-messages', { channelId: activeChannelId, beforeTs }, (res) => {
-    loadingOlderMsgs = false;
-    loader.classList.add('hidden');
-    loader.setAttribute('aria-hidden', 'true');
-    if (res?.error) { toast(res.error); return; }
-    chatHasMore = !!res.hasMore;
-    if ((res.messages || []).length) chatHistoryExpanded = true;
-    prependMessageList(container, res.messages || [], resolveChannelMsg);
-    if (!(res.messages || []).length) chatHasMore = false;
+  msgStore.loadOlder({
+    kind: 'chan',
+    channelId: activeChannelId,
+    container,
+    getBeforeTs: () => getOldestMessageTs(container),
+    fetch: async (beforeTs) => {
+      loader.classList.remove('hidden');
+      loader.setAttribute('aria-hidden', 'false');
+      const res = await emitAck('load-messages', { channelId: activeChannelId, beforeTs });
+      loader.classList.add('hidden');
+      loader.setAttribute('aria-hidden', 'true');
+      return res;
+    },
+    prepend: (msgs) => {
+      chatHistoryExpanded = true;
+      chatHasMore = msgStore.getHasMore('chan', activeChannelId);
+      prependMessageList(container, msgs, resolveChannelMsg);
+    },
   });
 }
 
 function loadOlderDmMessages() {
-  if (loadingOlderMsgs || !dmHasMore || !activeDmChannelId || activeView !== 'dm') return;
+  if (activeView !== 'dm' || !activeDmChannelId) return;
   const container = $('dm-messages');
-  const beforeTs = getOldestMessageTs(container);
-  if (!beforeTs) { dmHasMore = false; return; }
-  loadingOlderMsgs = true;
-  const loader = ensureHistoryLoader(container);
-  loader.classList.remove('hidden');
-  loader.setAttribute('aria-hidden', 'false');
   const friendId = activeDmFriendId;
-  socket.emit('load-dm-messages', { channelId: activeDmChannelId, beforeTs }, (res) => {
-    loadingOlderMsgs = false;
-    loader.classList.add('hidden');
-    loader.setAttribute('aria-hidden', 'true');
-    if (res?.error) { toast(res.error); return; }
-    dmHasMore = !!res.hasMore;
-    if ((res.messages || []).length) dmHistoryExpanded = true;
-    prependMessageList(container, res.messages || [], (m) => resolveDmMsg(m, friendId));
-    if (!(res.messages || []).length) dmHasMore = false;
+  const loader = ensureHistoryLoader(container);
+  msgStore.loadOlder({
+    kind: 'dm',
+    channelId: activeDmChannelId,
+    container,
+    getBeforeTs: () => getOldestMessageTs(container),
+    fetch: async (beforeTs) => {
+      loader.classList.remove('hidden');
+      loader.setAttribute('aria-hidden', 'false');
+      const res = await emitAck('load-dm-messages', { channelId: activeDmChannelId, beforeTs });
+      loader.classList.add('hidden');
+      loader.setAttribute('aria-hidden', 'true');
+      return res;
+    },
+    prepend: (msgs) => {
+      dmHistoryExpanded = true;
+      dmHasMore = msgStore.getHasMore('dm', activeDmChannelId);
+      prependMessageList(container, msgs, (m) => resolveDmMsg(m, friendId));
+    },
   });
 }
 
@@ -2314,12 +2320,10 @@ function resolveDmMsg(msg, friendId) {
 }
 
 function openTextChannel(channelId, name, push = true) {
-  const seq = msgStore.nextOpenSeq('chan');
   activeChannelId = channelId;
   activeDmFriendId = null;
   activeDmChannelId = null;
   setDmViewing(null);
-  loadingOlderMsgs = false;
   chatHistoryExpanded = false;
   dmPanelMode = null;
   dmFeatures?.closeSearchPanel?.();
@@ -2330,40 +2334,27 @@ function openTextChannel(channelId, name, push = true) {
   renderChannels();
 
   const container = $('chat-messages');
-  const cached = msgStore.getCached('chan', channelId);
-  let showedLoading = false;
-  if (cached?.messages?.length) {
-    chatHasMore = cached.hasMore !== false;
-    renderMessageList(container, cached.messages, resolveChannelMsg);
-    const prevRead = getLastRead('chan', channelId);
-    if (prevRead) insertUnreadDivider(container, prevRead);
-  } else {
-    showMessagesLoading(container);
-    showedLoading = true;
-    chatHasMore = true;
-  }
+  const prevRead = getLastRead('chan', channelId);
 
-  socket.emit('open-text-channel', { channelId }, (res) => {
-    if (!msgStore.isOpenSeqCurrent('chan', seq) || activeChannelId !== channelId) return;
-    if (res?.error) {
-      if (showedLoading) {
-        container.innerHTML = '';
-        ensureHistoryLoader(container);
-        toast(res.error);
-      }
-      return;
-    }
-    dmPins = res.pins || [];
-    chatHasMore = !!res.hasMore;
-    const serverMsgs = res.messages || [];
-    msgStore.saveMessages('chan', channelId, serverMsgs, res.hasMore);
-    if (showedLoading || !msgStore.sameTail(cached?.messages, serverMsgs)) {
-      renderMessageList(container, serverMsgs, resolveChannelMsg);
-      const prevRead = getLastRead('chan', channelId);
+  msgStore.open({
+    kind: 'chan',
+    channelId,
+    container,
+    paintLoading: () => paintLoading(container),
+    paint: (messages) => {
+      chatHasMore = msgStore.getHasMore('chan', channelId);
+      renderMessageList(container, messages, resolveChannelMsg);
       if (prevRead) insertUnreadDivider(container, prevRead);
-    }
-    setLastRead('chan', channelId, Date.now());
+    },
+    fetch: async () => {
+      const res = await emitAck('open-text-channel', { channelId });
+      if (res.error) { toast(res.error); return res; }
+      dmPins = res.pins || [];
+      return { messages: res.messages || [], hasMore: res.hasMore, channelId };
+    },
   });
+
+  setLastRead('chan', channelId, Date.now());
   if (push && activeServer) navTo(`/channels/${activeServer.id}/${channelId}`);
   closeDrawers();
 }
@@ -2450,27 +2441,14 @@ function renderDMMessages(messages, friendId) {
   renderDmStartHeader();
 }
 
-function paintDmFromServer({ container, cached, showedLoading, prevRead, friendId, channelId, messages, hasMore }) {
-  const serverMsgs = messages || [];
-  msgStore.saveMessages('dm', channelId, serverMsgs, hasMore, { friendId: friendId || null });
-  dmHasMore = !!hasMore;
-  if (showedLoading || !msgStore.sameTail(cached?.messages, serverMsgs)) {
-    renderDMMessages(serverMsgs, friendId || null);
-    const dividerTs = prevRead || getLastRead('dm', channelId);
-    if (dividerTs) insertUnreadDivider(container, dividerTs);
-  }
-}
-
 function openDM(friendId, push = true) {
   const friend = friends.find((f) => f.id === friendId);
   if (!friend) return;
-  const seq = msgStore.nextOpenSeq('dm');
   activeServer = null;
   activeDmFriendId = friendId;
   activeGroupId = null;
   activeGroupTitle = '';
   activeChannelId = null;
-  loadingOlderMsgs = false;
   keepUnreadBadge = false;
   dmHistoryExpanded = false;
   friend.unread = false;
@@ -2482,9 +2460,8 @@ function openDM(friendId, push = true) {
   dmFeatures?.closePinsPanel?.();
   dmFeatures?.updateCallStage?.(friend.username);
 
-  const resolved = msgStore.resolveDmCache(friendId, friend.dmChannelId);
+  const resolved = msgStore.resolveDm(friendId, friend.dmChannelId);
   activeDmChannelId = resolved.channelId;
-  const cached = resolved.cached;
   setDmViewing(activeDmChannelId);
   setMainView('dm');
   updateDmComposer();
@@ -2497,67 +2474,52 @@ function openDM(friendId, push = true) {
 
   const container = $('dm-messages');
   const prevRead = activeDmChannelId ? getLastRead('dm', activeDmChannelId) : 0;
-  let showedLoading = false;
 
-  if (cached?.messages?.length) {
-    dmHasMore = cached.hasMore !== false;
-    renderDMMessages(cached.messages, friendId);
-    if (prevRead) insertUnreadDivider(container, prevRead);
-    if (activeDmChannelId) applyActiveCallState(null, activeDmChannelId, cached.messages);
-  } else {
-    showMessagesLoading(container);
-    showedLoading = true;
-    dmHasMore = true;
-  }
-
-  socket.emit('open-dm', { friendId }, (res) => {
-    if (!msgStore.isOpenSeqCurrent('dm', seq) || activeDmFriendId !== friendId) return;
-    if (res?.error) {
-      if (showedLoading) {
-        container.innerHTML = '';
-        ensureHistoryLoader(container);
-        toast(res.error);
+  msgStore.open({
+    kind: 'dm',
+    channelId: activeDmChannelId,
+    friendId,
+    container,
+    paintLoading: () => paintLoading(container),
+    paint: (messages) => {
+      dmHasMore = msgStore.getHasMore('dm', activeDmChannelId);
+      renderDMMessages(messages, friendId);
+      if (prevRead) insertUnreadDivider(container, prevRead);
+    },
+    onChannel: (cid) => {
+      activeDmChannelId = cid;
+      friend.dmChannelId = cid;
+      setDmViewing(cid);
+      if (push) navTo(`/channels/@me/${cid}`);
+    },
+    fetch: async () => {
+      const res = await emitAck('open-dm', { friendId });
+      if (res.error) { toast(res.error); return res; }
+      friend.blocked = !!res.blockedByMe;
+      friend.blockedByThem = !!res.blockedByThem;
+      friend.dmChannelId = res.dmChannelId;
+      friend.unread = false;
+      restoreDmCallStageIfNeeded();
+      applyActiveCallState(res.activeCall, res.dmChannelId, res.messages || []);
+      dmPins = res.pins || [];
+      if (res.social) {
+        social = res.social;
+        if (social.unreadDms) delete social.unreadDms[friendId];
       }
-      return;
-    }
-    activeDmChannelId = res.dmChannelId;
-    msgStore.linkFriendChannel(friendId, res.dmChannelId);
-    setDmViewing(res.dmChannelId);
-    friend.blocked = !!res.blockedByMe;
-    friend.blockedByThem = !!res.blockedByThem;
-    friend.dmChannelId = res.dmChannelId;
-    friend.unread = false;
-    restoreDmCallStageIfNeeded();
-    applyActiveCallState(res.activeCall, res.dmChannelId, res.messages || []);
-    dmPins = res.pins || [];
-    if (res.social) {
-      social = res.social;
-      if (social.unreadDms) delete social.unreadDms[friendId];
-    }
-    updateDmComposer();
-    paintDmFromServer({
-      container, cached, showedLoading, prevRead, friendId,
-      channelId: res.dmChannelId, messages: res.messages, hasMore: res.hasMore,
-    });
-    setLastRead('dm', res.dmChannelId, Date.now());
-    if (push) navTo(`/channels/@me/${res.dmChannelId}`);
+      updateDmComposer();
+      setLastRead('dm', res.dmChannelId, Date.now());
+      return {
+        messages: res.messages || [],
+        hasMore: res.hasMore,
+        channelId: res.dmChannelId,
+      };
+    },
   });
   closeDrawers();
 }
 
-function applyDmChannelMeta(res) {
-  if (res.channel) {
-    const idx = groupDms.findIndex((g) => g.id === res.channel.id);
-    if (idx >= 0) groupDms[idx] = { ...groupDms[idx], ...res.channel };
-    else groupDms.push(res.channel);
-  }
-  dmPins = res.pins || [];
-  if (res.social) social = res.social;
-}
-
 function openGroupChannel(channel, push = true) {
   if (!channel?.id) return;
-  const seq = msgStore.nextOpenSeq('dm');
   activeServer = null;
   activeDmFriendId = null;
   activeGroupId = channel.id;
@@ -2567,7 +2529,6 @@ function openGroupChannel(channel, push = true) {
   setDmViewing(channel.id);
   if (dmIncoming?.channelId === channel.id) syncIncomingDmCallUi();
   activeChannelId = null;
-  loadingOlderMsgs = false;
   dmHistoryExpanded = false;
   showSidebarHome();
   setRailActive('home');
@@ -2583,48 +2544,43 @@ function openGroupChannel(channel, push = true) {
 
   const container = $('dm-messages');
   const prevRead = getLastRead('dm', channel.id);
-  const cached = msgStore.getCached('dm', channel.id);
-  let showedLoading = false;
-  if (cached?.messages?.length) {
-    dmHasMore = cached.hasMore !== false;
-    renderDMMessages(cached.messages, null);
-    if (prevRead) insertUnreadDivider(container, prevRead);
-  } else {
-    showMessagesLoading(container);
-    showedLoading = true;
-    dmHasMore = true;
-  }
 
-  socket.emit('get-dm-by-channel', { dmChannelId: channel.id }, (res) => {
-    if (!msgStore.isOpenSeqCurrent('dm', seq) || activeGroupId !== channel.id) return;
-    if (res?.error) {
-      if (showedLoading) {
-        container.innerHTML = '';
-        ensureHistoryLoader(container);
-        toast(res.error);
+  msgStore.open({
+    kind: 'dm',
+    channelId: channel.id,
+    container,
+    paintLoading: () => paintLoading(container),
+    paint: (messages) => {
+      dmHasMore = msgStore.getHasMore('dm', channel.id);
+      renderDMMessages(messages, null);
+      if (prevRead) insertUnreadDivider(container, prevRead);
+    },
+    fetch: async () => {
+      const res = await emitAck('get-dm-by-channel', { dmChannelId: channel.id });
+      if (res.error) { toast(res.error); return res; }
+      if (res.channel) {
+        const idx = groupDms.findIndex((g) => g.id === res.channel.id);
+        if (idx >= 0) groupDms[idx] = { ...groupDms[idx], ...res.channel };
+        else groupDms.push(res.channel);
+        activeGroupTitle = res.channel.name || res.channel.title || activeGroupTitle;
+        $('dm-title').textContent = activeGroupTitle;
       }
-      return;
-    }
-    applyDmChannelMeta(res);
-    if (res.channel) {
-      activeGroupTitle = res.channel.name || res.channel.title || activeGroupTitle;
-      $('dm-title').textContent = activeGroupTitle;
-    }
-    if (social.unreadGroups) delete social.unreadGroups[channel.id];
-    paintDmFromServer({
-      container, cached, showedLoading, prevRead, friendId: null,
-      channelId: channel.id, messages: res.messages, hasMore: res.hasMore,
-    });
-    setLastRead('dm', channel.id, Date.now());
-    applyActiveCallState(res.activeCall, channel.id, res.messages || []);
-    updatePanel();
+      dmPins = res.pins || [];
+      if (res.social) {
+        social = res.social;
+        if (social.unreadGroups) delete social.unreadGroups[channel.id];
+      }
+      setLastRead('dm', channel.id, Date.now());
+      applyActiveCallState(res.activeCall, channel.id, res.messages || []);
+      updatePanel();
+      return { messages: res.messages || [], hasMore: res.hasMore, channelId: channel.id };
+    },
   });
   closeDrawers();
 }
 
-/** Tek fetch — grup ise UI state ayarla, ikinci openGroupChannel çağırma */
+/** Tek get-dm-by-channel — grup/1:1 ayrımı burada, ikinci fetch yok */
 function openDMByChannel(dmChannelId, push = false) {
-  const seq = msgStore.nextOpenSeq('dm');
   activeServer = null;
   activeChannelId = null;
   activeDmChannelId = dmChannelId;
@@ -2632,92 +2588,97 @@ function openDMByChannel(dmChannelId, push = false) {
   setDmViewing(dmChannelId);
   if (push) navTo(`/channels/@me/${dmChannelId}`);
   if (dmIncoming?.channelId === dmChannelId) syncIncomingDmCallUi();
-
   setMainView('dm');
+
   const container = $('dm-messages');
   const prevRead = getLastRead('dm', dmChannelId);
-  const cached = msgStore.getCached('dm', dmChannelId);
-  let showedLoading = false;
-  if (cached?.messages?.length) {
-    dmHasMore = cached.hasMore !== false;
-    renderDMMessages(cached.messages, activeDmFriendId);
-    if (prevRead) insertUnreadDivider(container, prevRead);
-    restoreDmCallStageIfNeeded();
-  } else {
-    showMessagesLoading(container);
-    showedLoading = true;
-    dmHasMore = true;
-  }
 
-  socket.emit('get-dm-by-channel', { dmChannelId }, (res) => {
-    if (!msgStore.isOpenSeqCurrent('dm', seq)) return;
-    if (res?.error) {
-      toast(res.error);
-      goHome(false);
-      navTo('/channels/@me');
-      return;
-    }
+  msgStore.open({
+    kind: 'dm',
+    channelId: dmChannelId,
+    container,
+    paintLoading: () => paintLoading(container),
+    paint: (messages) => {
+      dmHasMore = msgStore.getHasMore('dm', activeDmChannelId || dmChannelId);
+      renderDMMessages(messages, activeDmFriendId);
+      if (prevRead) insertUnreadDivider(container, prevRead);
+    },
+    fetch: async () => {
+      const res = await emitAck('get-dm-by-channel', { dmChannelId });
+      if (res.error) {
+        toast(res.error);
+        goHome(false);
+        navTo('/channels/@me');
+        return res;
+      }
 
-    const isGroup = res.type === 'group' || res.channel?.type === 'group';
-    applyDmChannelMeta(res);
+      const isGroup = res.type === 'group' || res.channel?.type === 'group';
+      if (isGroup) {
+        const ch = res.channel || { id: dmChannelId };
+        activeGroupId = ch.id;
+        activeDmFriendId = null;
+        activeGroupTitle = ch.name || ch.title || 'Grup';
+        activeDmChannelId = ch.id;
+        $('dm-title').textContent = activeGroupTitle;
+        dmFeatures?.updateCallStage?.(activeGroupTitle);
+        if (res.social) {
+          social = res.social;
+          if (social.unreadGroups) delete social.unreadGroups[ch.id];
+        }
+        const idx = groupDms.findIndex((g) => g.id === ch.id);
+        if (idx >= 0) groupDms[idx] = { ...groupDms[idx], ...ch };
+        else groupDms.push(ch);
+        showSidebarHome();
+        setRailActive('home');
+        renderFriends();
+        updateDmComposer();
+        dmPins = res.pins || [];
+        setLastRead('dm', ch.id, Date.now());
+        applyActiveCallState(res.activeCall, ch.id, res.messages || []);
+        updatePanel();
+        if (push) navTo(`/channels/@me/${ch.id}`);
+        closeDrawers();
+        return { messages: res.messages || [], hasMore: res.hasMore, channelId: ch.id };
+      }
 
-    if (isGroup) {
-      const ch = res.channel || { id: dmChannelId };
-      activeGroupId = ch.id;
-      activeDmFriendId = null;
-      activeGroupTitle = ch.name || ch.title || 'Grup';
-      activeDmChannelId = ch.id;
-      $('dm-title').textContent = activeGroupTitle;
-      dmFeatures?.updateCallStage?.(activeGroupTitle);
-      if (social.unreadGroups) delete social.unreadGroups[ch.id];
+      activeGroupId = null;
+      activeDmFriendId = res.friendId;
+      activeDmChannelId = res.dmChannelId;
+      msgStore.linkFriend(res.friendId, res.dmChannelId);
+      setDmViewing(res.dmChannelId);
+      dmHistoryExpanded = false;
+      if (res.social) {
+        social = res.social;
+        if (social.unreadDms) delete social.unreadDms[res.friendId];
+      }
+      const friend = friends.find((f) => f.id === res.friendId);
+      if (friend) {
+        friend.blocked = !!res.blockedByMe;
+        friend.blockedByThem = !!res.blockedByThem;
+        friend.dmChannelId = res.dmChannelId;
+        friend.unread = false;
+      }
       showSidebarHome();
       setRailActive('home');
       renderFriends();
+      $('dm-title').textContent = `@ ${res.friend.username}`;
+      dmFeatures?.updateCallStage?.(res.friend.username);
       updateDmComposer();
-      paintDmFromServer({
-        container, cached, showedLoading, prevRead, friendId: null,
-        channelId: ch.id, messages: res.messages, hasMore: res.hasMore,
-      });
-      setLastRead('dm', ch.id, Date.now());
-      applyActiveCallState(res.activeCall, ch.id, res.messages || []);
-      updatePanel();
-      if (push) navTo(`/channels/@me/${ch.id}`);
+      dmHeaderProfile = null;
+      fetchDmHeaderProfile(res.friendId);
+      restoreDmCallStageIfNeeded();
+      applyActiveCallState(res.activeCall, res.dmChannelId, res.messages || []);
+      dmPins = res.pins || [];
+      setLastRead('dm', res.dmChannelId, Date.now());
+      if (push) navTo(`/channels/@me/${res.dmChannelId}`);
       closeDrawers();
-      return;
-    }
-
-    activeGroupId = null;
-    activeDmFriendId = res.friendId;
-    activeDmChannelId = res.dmChannelId;
-    msgStore.linkFriendChannel(res.friendId, res.dmChannelId);
-    setDmViewing(res.dmChannelId);
-    loadingOlderMsgs = false;
-    dmHistoryExpanded = false;
-    if (social.unreadDms) delete social.unreadDms[res.friendId];
-    const friend = friends.find((f) => f.id === res.friendId);
-    if (friend) {
-      friend.blocked = !!res.blockedByMe;
-      friend.blockedByThem = !!res.blockedByThem;
-      friend.dmChannelId = res.dmChannelId;
-      friend.unread = false;
-    }
-    showSidebarHome();
-    setRailActive('home');
-    renderFriends();
-    $('dm-title').textContent = `@ ${res.friend.username}`;
-    dmFeatures?.updateCallStage?.(res.friend.username);
-    updateDmComposer();
-    dmHeaderProfile = null;
-    fetchDmHeaderProfile(res.friendId);
-    restoreDmCallStageIfNeeded();
-    applyActiveCallState(res.activeCall, res.dmChannelId, res.messages || []);
-    paintDmFromServer({
-      container, cached, showedLoading, prevRead, friendId: res.friendId,
-      channelId: res.dmChannelId, messages: res.messages, hasMore: res.hasMore,
-    });
-    setLastRead('dm', res.dmChannelId, Date.now());
-    if (push) navTo(`/channels/@me/${res.dmChannelId}`);
-    closeDrawers();
+      return {
+        messages: res.messages || [],
+        hasMore: res.hasMore,
+        channelId: res.dmChannelId,
+        friendId: res.friendId,
+      };
+    },
   });
 }
 
@@ -3714,7 +3675,7 @@ function confirmRemoveFriend(friend) {
 
 function openUserProfile(userId) {
   if (!socket) return;
-  const cached = profilePanelCache[userId] || msgStore.getCachedProfile(userId);
+  const cached = profilePanelCache[userId] || msgStore.getProfile(userId);
   if (cached?.user) {
     profileTarget = cached;
     profileMutualTab = 'friends';
@@ -4152,7 +4113,7 @@ function connectSocket(token) {
 
   socket.on('dm-call-log', ({ channelId, message }) => {
     if (!message) return;
-    if (channelId) msgStore.patchMessage('dm', channelId, message.id, message);
+    if (channelId) msgStore.patch('dm', channelId, message.id, message);
     if (channelId === activeDmChannelId && activeView === 'dm') {
       const el = document.querySelector(`.msg[data-msg-id="${CSS.escape(String(message.id))}"]`);
       if (el) applyDmCallLogUpdate(message);
@@ -4189,22 +4150,22 @@ function connectSocket(token) {
   });
 
   socket.on('message-edited', ({ channelId, messageId, text }) => {
-    if (channelId) msgStore.patchMessage('chan', channelId, messageId, { text, edited: true });
+    if (channelId) msgStore.patch('chan', channelId, messageId, { text, edited: true });
     if (channelId === activeChannelId && activeView === 'chat') applyEditToDom(messageId, text);
   });
 
   socket.on('message-deleted', ({ channelId, messageId }) => {
-    if (channelId) msgStore.removeMessage('chan', channelId, messageId);
+    if (channelId) msgStore.remove('chan', channelId, messageId);
     if (channelId === activeChannelId && activeView === 'chat') removeMsgFromDom(messageId);
   });
 
   socket.on('dm-edited', ({ channelId, messageId, text }) => {
-    if (channelId) msgStore.patchMessage('dm', channelId, messageId, { text, edited: true });
+    if (channelId) msgStore.patch('dm', channelId, messageId, { text, edited: true });
     if (channelId === activeDmChannelId && activeView === 'dm') applyEditToDom(messageId, text);
   });
 
   socket.on('dm-deleted', ({ channelId, messageId }) => {
-    if (channelId) msgStore.removeMessage('dm', channelId, messageId);
+    if (channelId) msgStore.remove('dm', channelId, messageId);
     if (channelId === activeDmChannelId && activeView === 'dm') removeMsgFromDom(messageId);
   });
 
