@@ -76,6 +76,7 @@ let dmCallActive = false;
 let dmCallRinging = false; // giden arama (karşı taraf bekleniyor)
 let dmCallChannelId = null; // arama hangi DM kanalında (navigasyon activeDmChannelId'yi silse bile)
 let dmIncoming = null; // { channelId, fromId, fromUsername }
+let dmHeaderProfile = null; // DM başlık kartı için profil özeti
 let dmReply = null;
 let dmFeatures = null;
 let voiceManager = null;
@@ -1325,6 +1326,7 @@ function makeMsgEl(author, text, ts, msgId = null, extra = {}) {
       </div>`;
   }
   if (invite) bindServerInviteCard(div, invite);
+  bindDmAuthorContextMenu(div, extra);
   if (msgId && !extra.pending && ((activeView === 'dm' && activeDmChannelId) || (activeView === 'chat' && activeChannelId))) {
     div.dataset.allowMenu = '1';
     div.addEventListener('contextmenu', (e) => {
@@ -1350,6 +1352,93 @@ function makeMsgEl(author, text, ts, msgId = null, extra = {}) {
     });
   }
   return div;
+}
+
+/** DM'de mesajdaki kullanıcı adı / avatara sağ tık → kanal menüsü */
+function bindDmAuthorContextMenu(msgEl, extra = {}) {
+  if (activeView !== 'dm' || activeGroupId || !activeDmFriendId) return;
+  if (extra.metadata?.type === 'dm_call' || extra.compact) return;
+  const authorId = extra.authorId || extra.fromId;
+  if (String(authorId) !== String(activeDmFriendId)) return;
+  const friend = friends.find((f) => f.id === activeDmFriendId);
+  if (!friend) return;
+  const open = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    openDmContextMenu(e.clientX, e.clientY, friend);
+  };
+  msgEl.querySelector('.msg-avatar')?.addEventListener('contextmenu', open);
+  msgEl.querySelector('.msg-author')?.addEventListener('contextmenu', open);
+}
+
+function fetchDmHeaderProfile(friendId) {
+  if (!socket || !friendId) return;
+  socket.emit('get-profile', { userId: friendId }, (res) => {
+    if (res?.error || activeDmFriendId !== friendId) return;
+    dmHeaderProfile = res;
+    renderDmStartHeader();
+  });
+}
+
+function renderDmStartHeader() {
+  const container = $('dm-messages');
+  if (!container) return;
+  container.querySelector('.dm-start-header')?.remove();
+  if (!activeDmFriendId || activeGroupId || activeView !== 'dm') return;
+  const friend = friends.find((f) => f.id === activeDmFriendId);
+  if (!friend) return;
+
+  const mutualServers = dmHeaderProfile?.mutualServers || [];
+  const serverIcons = mutualServers.slice(0, 3).map((s) =>
+    `<span class="dm-start-server-icon" title="${escapeHtml(s.name)}">${escapeHtml(initials(s.name))}</span>`
+  ).join('');
+  const mutualLabel = mutualServers.length
+    ? `${mutualServers.length} Ortak Sunucu`
+    : '';
+
+  const hdr = document.createElement('div');
+  hdr.className = 'dm-start-header';
+  hdr.innerHTML = `
+    <div class="dm-start-avatar-wrap">
+      <span class="dm-start-avatar">${escapeHtml(initials(friend.username))}</span>
+      <span class="dm-start-status user-chip-dot${friend.online ? ' on' : ''}"></span>
+    </div>
+    <h2 class="dm-start-name">${escapeHtml(friend.username)}</h2>
+    <div class="dm-start-handle">@${escapeHtml(friend.username)}</div>
+    <p class="dm-start-intro">Bu <strong>${escapeHtml(friend.username)}</strong> kullanıcısıyla olan direkt mesaj geçmişinin başlangıcıdır.</p>
+    ${mutualLabel ? `
+      <button type="button" class="dm-start-mutuals" id="dm-start-mutuals">
+        <span class="dm-start-server-icons">${serverIcons}</span>
+        <span>${escapeHtml(mutualLabel)}</span>
+      </button>` : ''}
+    <div class="dm-start-actions">
+      <button type="button" class="dm-start-btn" id="dm-start-unfriend">Arkadaşı Çıkar</button>
+      <button type="button" class="dm-start-btn dm-start-btn--danger" id="dm-start-block">${friend.blocked ? 'Engeli Kaldır' : 'Engelle'}</button>
+    </div>`;
+
+  const loader = container.querySelector('.msg-history-loader');
+  const firstMsg = container.querySelector('.msg, .msg-day-divider, .blocked-msg-group, .msg-unread-divider');
+  if (firstMsg) container.insertBefore(hdr, firstMsg);
+  else if (loader) loader.after(hdr);
+  else container.appendChild(hdr);
+
+  hdr.querySelector('#dm-start-mutuals')?.addEventListener('click', () => openUserProfile(friend.id));
+  hdr.querySelector('#dm-start-unfriend')?.addEventListener('click', () => confirmRemoveFriend(friend));
+  hdr.querySelector('#dm-start-block')?.addEventListener('click', () => {
+    if (friend.blocked) {
+      socket.emit('user-block', { targetId: friend.id, blocked: false }, () => openDM(friend.id, false));
+      return;
+    }
+    showModal('Engelle', `<p><strong>${escapeHtml(friend.username)}</strong> engellenecek.</p>`, [
+      { label: 'İptal', className: 'btn-secondary', onClick: closeModal },
+      {
+        label: 'Engelle', className: 'btn-danger', onClick: () => {
+          closeModal();
+          socket.emit('user-block', { targetId: friend.id, blocked: true }, () => openDM(friend.id, false));
+        },
+      },
+    ]);
+  });
 }
 
 /* ---- Gün ayırıcı + gruplama ---- */
@@ -1630,7 +1719,15 @@ function prependMessageList(container, messages, resolve) {
   const frag = buildMessagesFragment(fresh, resolve, state);
   // Batch'ten hemen sonra gelen mevcut gün ayırıcısı aynı güne aitse kaldır (mükerrer olmasın)
   let nextExisting = loader.nextElementSibling;
-  loader.after(frag);
+  while (nextExisting?.classList?.contains('dm-start-header')) {
+    nextExisting = nextExisting.nextElementSibling;
+  }
+  if (nextExisting) nextExisting.before(frag);
+  else loader.after(frag);
+  nextExisting = loader.nextElementSibling;
+  while (nextExisting?.classList?.contains('dm-start-header')) {
+    nextExisting = nextExisting.nextElementSibling;
+  }
   if (nextExisting?.classList?.contains('msg-day-divider') && nextExisting.dataset.day === state.day) {
     nextExisting.remove();
   }
@@ -2156,6 +2253,12 @@ function updateDmComposer() {
   const blockedByMe = !!(f?.blocked || (activeDmFriendId && (social.blocked || []).includes(activeDmFriendId)));
   const blockedByThem = !!f?.blockedByThem;
   const locked = blockedByMe || blockedByThem;
+  const dmInput = $('dm-input');
+  if (dmInput) {
+    if (activeGroupId) dmInput.placeholder = 'Mesaj yaz…';
+    else if (f) dmInput.placeholder = `@${f.username} kullanıcısına mesaj gönder`;
+    else dmInput.placeholder = 'Mesaj yaz…';
+  }
   form.classList.toggle('hidden', locked);
   bar.classList.toggle('hidden', !locked);
   if (!locked) return;
@@ -2211,6 +2314,7 @@ $('chat-form').addEventListener('submit', (e) => {
 /* ================= DM ================= */
 function renderDMMessages(messages, friendId) {
   renderMessageList($('dm-messages'), messages || [], (msg) => resolveDmMsg(msg, friendId));
+  renderDmStartHeader();
 }
 
 /** Aynı mesaj seti zaten ekrandaysa DOM'u yeniden çizme (flash önler) */
@@ -2273,6 +2377,8 @@ function openDM(friendId, push = true) {
   setMainView('dm');
   updateDmComposer();
   renderFriends();
+  dmHeaderProfile = null;
+  fetchDmHeaderProfile(friendId);
   if (cacheId && push) navTo(`/channels/@me/${cacheId}`);
   restoreDmCallStageIfNeeded();
   if (dmIncoming?.channelId === cacheId) syncIncomingDmCallUi();
@@ -2424,6 +2530,8 @@ function openDMByChannel(dmChannelId, push = false) {
     dmFeatures?.updateCallStage?.(res.friend.username);
     setMainView('dm');
     updateDmComposer();
+    dmHeaderProfile = null;
+    fetchDmHeaderProfile(res.friendId);
     restoreDmCallStageIfNeeded();
     applyActiveCallState(res.activeCall, res.dmChannelId, res.messages || []);
     dmPins = res.pins || [];
@@ -3171,6 +3279,19 @@ function openDmContextMenu(x, y, friend) {
   menu.appendChild(ctxItem({
     label: 'Profil',
     onClick: () => { closeCtxMenu(); openUserProfile(friend.id); },
+  }));
+  menu.appendChild(ctxItem({
+    label: 'Bir Arama Başlat',
+    onClick: () => { closeCtxMenu(); startDmCall(); },
+  }));
+  menu.appendChild(ctxItem({
+    label: 'Not Ekle',
+    sub: 'Sadece sana görünür',
+    onClick: () => { closeCtxMenu(); openUserProfile(friend.id); },
+  }));
+  menu.appendChild(ctxItem({
+    label: 'Arkadaş Takma Adı Ekle',
+    disabled: true,
   }));
   menu.appendChild(ctxItem({
     label: 'DM\'yi Kapat',

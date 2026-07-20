@@ -361,15 +361,16 @@ html[data-theme="light"] .voice-conn { background: #e8ebf2; }
 .workspace-head {
   flex: 0 0 auto;
   background: var(--sidebar-bg);
-  min-height: 52px;
+  min-height: 44px;
   border-radius: var(--float-radius);
   border: 1px solid var(--border);
   box-shadow: var(--float-shadow);
   overflow: hidden;
 }
 .workspace-head .view-head {
-  min-height: 52px;
+  min-height: 44px;
   box-sizing: border-box;
+  padding: .45rem .85rem;
 }
 .workspace-body {
   display: flex; flex: 1; min-height: 0; min-width: 0;
@@ -569,9 +570,9 @@ html[data-theme="light"] .voice-conn { background: #e8ebf2; }
 }
 .msg:hover { background: color-mix(in srgb, var(--text) 5%, transparent); }
 @keyframes msgIn { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:translateY(0)} }
-.msg-avatar { width: 36px; height: 36px; border-radius: 50%; background: var(--accent); color: #fff; display: grid; place-items: center; font-weight: 700; font-size: .75rem; flex: 0 0 auto; align-self: flex-start; }
+.msg-avatar { width: 36px; height: 36px; border-radius: 50%; background: var(--accent); color: #fff; display: grid; place-items: center; font-weight: 700; font-size: .75rem; flex: 0 0 auto; align-self: flex-start; cursor: context-menu; }
 .msg-body { min-width: 0; flex: 1; }
-.msg-author { font-weight: 700; font-size: .88rem; margin-right: .5rem; }
+.msg-author { font-weight: 700; font-size: .88rem; margin-right: .5rem; cursor: context-menu; }
 .msg-time { font-size: .72rem; color: var(--muted); }
 .msg-text { font-size: .92rem; line-height: 1.45; word-break: break-word; margin-top: .1rem; }
 .msg-text.hidden { display: none; }
@@ -741,17 +742,23 @@ html[data-theme="light"] .voice-conn { background: #e8ebf2; }
   margin-left: .35rem;
 }
 .chat-input {
-  display: flex; gap: .5rem;
+  display: flex; gap: .4rem; align-items: center;
   margin: 0 var(--float-gap) var(--float-gap);
-  padding: .65rem .85rem;
+  padding: .4rem .55rem;
   flex: 0 0 auto;
   border-radius: var(--float-radius);
   border: 1px solid var(--border);
   background: var(--sidebar-bg);
   box-shadow: var(--float-shadow);
 }
-.chat-input input { flex: 1; border: 0; background: transparent; padding-left: .35rem; }
+.chat-input input {
+  flex: 1; border: 0; background: transparent;
+  padding: .45rem .5rem; font-size: .9rem;
+}
 .chat-input input:focus { box-shadow: none; }
+@media (min-width: 769px) {
+  .chat-input .chat-send-btn { display: none; }
+}
 
 .dm-blocked-bar {
   display: flex; align-items: center; justify-content: space-between; gap: .75rem;

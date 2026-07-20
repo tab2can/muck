@@ -823,7 +823,8 @@ export async function searchDmChannel(userId, channelId, query, limit = 50) {
     .order('created_at', { ascending: false })
     .limit(limit);
   if (error) return { error: error.message };
-  const results = await enrichSearchRows(data || []);
+  const userMsgs = (data || []).filter((m) => m.metadata?.type !== 'dm_call');
+  const results = await enrichSearchRows(userMsgs);
   return { results, messages: results };
 }
 

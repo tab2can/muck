@@ -149,7 +149,8 @@ export function initChatFeatures(api) {
     const state = st();
     if (!box) return;
     box.innerHTML = '';
-    if (count) count.textContent = `${results.length} Sonuç`;
+    const visible = (results || []).filter((m) => m.metadata?.type !== 'dm_call');
+    if (count) count.textContent = `${visible.length} Sonuç`;
     if (ctx) {
       if (kind() === 'channel') ctx.textContent = state.chatTitle || '# kanal';
       else {
@@ -158,7 +159,7 @@ export function initChatFeatures(api) {
           : `@ ${state.activeDmFriendName || ''}`;
       }
     }
-    for (const m of results) {
+    for (const m of visible) {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'dm-result-card';

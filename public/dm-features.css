@@ -1,32 +1,91 @@
 /* DM header tools */
 .dm-head {
-  display: flex; align-items: center; justify-content: space-between; gap: .75rem;
+  display: flex; align-items: center; justify-content: space-between; gap: .5rem;
   width: 100%;
 }
 .dm-head-left {
-  min-width: 0; font-weight: 700; font-size: .95rem;
+  min-width: 0; font-weight: 700; font-size: .88rem;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.dm-head-actions { display: flex; align-items: center; gap: .2rem; flex: 0 0 auto; }
+.dm-head-actions { display: flex; align-items: center; gap: .15rem; flex: 0 0 auto; }
 .dm-tool-btn {
-  width: 36px; height: 36px; border: none; border-radius: 8px;
+  width: 30px; height: 30px; border: none; border-radius: 7px;
   background: transparent; color: var(--muted); cursor: pointer;
   display: grid; place-items: center;
 }
-.dm-tool-btn svg { display: block; width: 20px; height: 20px; }
+.dm-tool-btn svg { display: block; width: 18px; height: 18px; }
 .dm-tool-btn:hover, .dm-tool-btn.active { background: var(--surface-2); color: var(--text); }
 .dm-search-field {
-  display: flex; align-items: center; gap: .35rem;
-  margin-left: .35rem; padding: .3rem .55rem;
-  border-radius: 8px; background: var(--surface-2); border: 1px solid var(--border);
-  min-width: 180px; max-width: 240px;
+  display: flex; align-items: center; gap: .3rem;
+  margin-left: .2rem; padding: .18rem .45rem;
+  border-radius: 7px; background: var(--surface-2); border: 1px solid var(--border);
+  min-width: 130px; max-width: 200px;
 }
 .dm-search-field input {
   flex: 1; border: none; background: transparent; color: var(--text);
-  font-family: inherit; font-size: .82rem; padding: .2rem 0; outline: none;
+  font-family: inherit; font-size: .78rem; padding: .15rem 0; outline: none;
   min-width: 0;
 }
-.dm-search-field svg { color: var(--muted); flex: 0 0 auto; }
+.dm-search-field svg { color: var(--muted); flex: 0 0 auto; width: 14px; height: 14px; }
+
+/* DM sohbet başlangıç kartı */
+.dm-start-header {
+  display: flex; flex-direction: column; align-items: flex-start;
+  padding: 1.1rem 1.25rem 1.35rem;
+  margin: 0 0 .5rem;
+  border-bottom: 1px solid var(--border);
+}
+.dm-start-avatar-wrap { position: relative; margin-bottom: .65rem; }
+.dm-start-avatar {
+  width: 80px; height: 80px; border-radius: 50%;
+  background: var(--accent); color: #fff;
+  display: grid; place-items: center;
+  font-size: 1.75rem; font-weight: 800;
+}
+.dm-start-status {
+  position: absolute; right: 2px; bottom: 2px;
+  width: 18px; height: 18px; border-width: 4px;
+}
+.dm-start-name {
+  font-size: 1.65rem; font-weight: 800; line-height: 1.15; margin: 0;
+}
+.dm-start-handle {
+  margin-top: .15rem; color: var(--muted); font-size: .92rem;
+}
+.dm-start-intro {
+  margin: .85rem 0 0; max-width: 36rem;
+  font-size: .95rem; line-height: 1.45; color: var(--text);
+}
+.dm-start-mutuals {
+  display: inline-flex; align-items: center; gap: .45rem;
+  margin-top: .85rem; padding: 0;
+  border: 0; background: none; cursor: pointer;
+  color: var(--muted); font-size: .82rem; font-weight: 600;
+  font-family: inherit;
+}
+.dm-start-mutuals:hover { color: var(--text); text-decoration: underline; }
+.dm-start-server-icons { display: inline-flex; align-items: center; }
+.dm-start-server-icon {
+  width: 22px; height: 22px; border-radius: 50%;
+  background: var(--surface-3); color: var(--text);
+  display: grid; place-items: center;
+  font-size: .58rem; font-weight: 700;
+  border: 2px solid var(--bg);
+  margin-left: -6px;
+}
+.dm-start-server-icon:first-child { margin-left: 0; }
+.dm-start-actions {
+  display: flex; flex-wrap: wrap; gap: .5rem;
+  margin-top: 1rem;
+}
+.dm-start-btn {
+  border: 0; border-radius: 8px;
+  background: var(--surface-2); color: var(--text);
+  padding: .45rem .85rem; font-size: .82rem; font-weight: 650;
+  cursor: pointer; font-family: inherit;
+}
+.dm-start-btn:hover { background: var(--surface-3); }
+.dm-start-btn--danger { color: var(--danger); }
 
 /* DM search / pins panels */
 .dm-side-panel {
@@ -243,7 +302,7 @@
 }
 
 .dm-emoji-btn {
-  width: 40px; height: 40px; border: none; border-radius: 10px;
+  width: 34px; height: 34px; border: none; border-radius: 8px;
   background: var(--surface-2); color: var(--muted); cursor: pointer;
   display: grid; place-items: center; flex: 0 0 auto;
 }
