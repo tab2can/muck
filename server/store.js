@@ -967,16 +967,17 @@ export async function getOrCreateDMChannel(a, b) {
 }
 
 /** Okunmamış işaretleme — mesaj emit'inden sonra arka planda */
-export async function markDmRecipientsUnread(channel, fromId) {
+export async function markDmRecipientsUnread(channel, fromId, { skipUserIds = [] } = {}) {
   if (!channel?.users?.length) return;
+  const skip = new Set((skipUserIds || []).map(String));
   await Promise.all(
     channel.users
-      .filter((uid) => uid !== fromId)
+      .filter((uid) => uid !== fromId && !skip.has(String(uid)))
       .map(async (uid) => {
         const s = await getSocial(uid);
         if (channel.type === 'group') {
           s.unreadGroups[channel.id] = true;
-          s.closedGroups = s.closedGroups.filter((id) => id !== channel.id);
+          s.closedGroups = (s.closedGroups || []).filter((id) => id !== channel.id);
         } else {
           s.unreadDms[fromId] = true;
           s.closedDms = s.closedDms.filter((id) => id !== fromId);

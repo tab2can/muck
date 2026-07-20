@@ -1010,6 +1010,10 @@ io.on('connection', async (socket) => {
   });
 
   // ---- DMs ----
+  socket.on('dm-viewing', ({ channelId }) => {
+    socket.data.viewingDmChannelId = channelId || null;
+  });
+
   socket.on('open-dm', async ({ friendId }, cb) => {
     const [friend, friends] = await Promise.all([
       store.findById(friendId),
@@ -1017,6 +1021,7 @@ io.on('connection', async (socket) => {
     ]);
     if (!friend || !friends.some((f) => f.id === friendId)) return cb?.({ error: 'Arkadaş bulunamadı.' });
     const channel = await store.getOrCreateDMChannel(userId, friendId);
+    socket.data.viewingDmChannelId = channel.id;
 
     const [bs, pinRes, page, social, pubChannel] = await Promise.all([
       store.blockState(userId, friendId),
@@ -1056,6 +1061,7 @@ io.on('connection', async (socket) => {
 
     if (!socket.data.dmChannelCache) socket.data.dmChannelCache = {};
     socket.data.dmChannelCache[channel.id] = channel;
+    socket.data.viewingDmChannelId = channel.id;
 
     if (channel.type === 'group') {
       const [pinRes, page, social, pubChannel] = await Promise.all([
@@ -1126,6 +1132,22 @@ io.on('connection', async (socket) => {
   socket.on('send-dm', async ({ friendId, text, channelId, replyTo }, cb) => {
     if (!text?.trim()) return cb?.({ error: 'Boş mesaj.' });
 
+    function usersViewingDmChannel(channelId) {
+      const viewing = [];
+      if (!channelId) return viewing;
+      for (const [uid, sockets] of onlineUsers) {
+        if (!sockets?.size) continue;
+        for (const sid of sockets) {
+          const s = io.sockets.sockets.get(sid);
+          if (s?.data?.viewingDmChannelId && String(s.data.viewingDmChannelId) === String(channelId)) {
+            viewing.push(uid);
+            break;
+          }
+        }
+      }
+      return viewing;
+    }
+
     async function broadcastDmFast(channel, msg) {
       const payload = {
         channelId: channel.id,
@@ -1140,15 +1162,20 @@ io.on('connection', async (socket) => {
         blocked: false,
       };
       const recipients = channel.users.filter((uid) => uid !== userId);
+      const viewing = new Set(usersViewingDmChannel(channel.id).map(String));
       for (const uid of recipients) {
         const sockets = onlineUsers.get(uid);
         if (!sockets?.size) continue;
         for (const sid of sockets) io.to(sid).emit('dm', payload);
       }
+      // Sohbeti açık görenlere unread yazma (görünen mesaj + okunmadı yarışı)
+      const skipUserIds = recipients.filter((uid) => viewing.has(String(uid)));
       setImmediate(() => {
-        store.markDmRecipientsUnread(channel, userId)
+        store.markDmRecipientsUnread(channel, userId, { skipUserIds })
           .then(() => Promise.all([
-            ...recipients.map((uid) => emitSocial(uid).catch(() => {})),
+            ...recipients
+              .filter((uid) => !viewing.has(String(uid)))
+              .map((uid) => emitSocial(uid).catch(() => {})),
             emitSocial(userId).catch(() => {}),
           ]))
           .catch(() => {});
@@ -1387,9 +1414,23 @@ io.on('connection', async (socket) => {
       if (sockets) for (const sid of sockets) io.to(sid).emit('dm', payload);
     }
     setImmediate(() => {
-      store.markDmRecipientsUnread(channel, userId)
+      const viewing = new Set();
+      for (const [uid, sockets] of onlineUsers) {
+        if (!sockets?.size) continue;
+        for (const sid of sockets) {
+          const s = io.sockets.sockets.get(sid);
+          if (s?.data?.viewingDmChannelId && String(s.data.viewingDmChannelId) === String(channel.id)) {
+            viewing.add(String(uid));
+            break;
+          }
+        }
+      }
+      const skipUserIds = channel.users.filter((uid) => uid !== userId && viewing.has(String(uid)));
+      store.markDmRecipientsUnread(channel, userId, { skipUserIds })
         .then(() => Promise.all([
-          emitSocial(targetId).catch(() => {}),
+          ...channel.users
+            .filter((uid) => uid !== userId && !viewing.has(String(uid)))
+            .map((uid) => emitSocial(uid).catch(() => {})),
           emitSocial(userId).catch(() => {}),
         ]))
         .catch(() => {});
