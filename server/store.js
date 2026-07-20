@@ -105,6 +105,23 @@ export async function findByUsername(username) {
 
 const profileCache = new Map(); // id -> { user, expires }
 const PROFILE_TTL_MS = 60_000;
+/** getUserProfile sonuç önbelleği (viewer:target) */
+const profileResultCache = new Map();
+const PROFILE_RESULT_TTL_MS = 45_000;
+
+export function invalidateProfileCache(userId = null) {
+  if (!userId) {
+    profileCache.clear();
+    profileResultCache.clear();
+    return;
+  }
+  profileCache.delete(userId);
+  for (const key of profileResultCache.keys()) {
+    if (key.startsWith(`${userId}:`) || key.endsWith(`:${userId}`)) {
+      profileResultCache.delete(key);
+    }
+  }
+}
 
 export async function findById(id) {
   if (!id) return null;
@@ -257,6 +274,8 @@ export async function setFriendNote(userId, friendId, note) {
   if (!t) delete s.notes[friendId];
   else s.notes[friendId] = t;
   await saveSocial(userId, s);
+  invalidateProfileCache(userId);
+  invalidateProfileCache(friendId);
   return { social: s };
 }
 
@@ -279,14 +298,41 @@ function pairKey(a, b) {
 }
 
 export async function getFriends(userId) {
+  const ids = await getFriendIds(userId);
+  if (!ids.length) return [];
+  const { data: profiles } = await supabase.from('profiles').select('*').in('id', ids);
+  return (profiles || []).map(profileToUser);
+}
+
+/** Sadece arkadaş ID listesi — profil çekmeden */
+export async function getFriendIds(userId) {
   const { data } = await supabase
     .from('friendships')
     .select('user_a, user_b')
     .or(`user_a.eq.${userId},user_b.eq.${userId}`);
-  const ids = (data || []).map((r) => (r.user_a === userId ? r.user_b : r.user_a));
-  if (!ids.length) return [];
-  const { data: profiles } = await supabase.from('profiles').select('*').in('id', ids);
-  return (profiles || []).map(profileToUser);
+  return (data || []).map((r) => (r.user_a === userId ? r.user_b : r.user_a));
+}
+
+/** Ortak sunucular — tam bundle yüklemeden sadece id+name */
+async function getMutualServersLite(viewerId, targetId) {
+  const { data: mine } = await supabase
+    .from('server_members')
+    .select('server_id')
+    .eq('user_id', viewerId);
+  const myIds = (mine || []).map((m) => m.server_id);
+  if (!myIds.length) return [];
+  const { data: theirs } = await supabase
+    .from('server_members')
+    .select('server_id')
+    .eq('user_id', targetId)
+    .in('server_id', myIds);
+  const mutualIds = [...new Set((theirs || []).map((t) => t.server_id))];
+  if (!mutualIds.length) return [];
+  const { data: servers } = await supabase
+    .from('servers')
+    .select('id, name')
+    .in('id', mutualIds);
+  return (servers || []).map((s) => ({ id: s.id, name: s.name }));
 }
 
 export async function getFriendRequests(userId) {
@@ -406,32 +452,42 @@ export async function removeFriend(userId, friendId) {
 }
 
 export async function getUserProfile(viewerId, targetId) {
-  const target = await findById(targetId);
+  if (!targetId) return { error: 'Kullanıcı bulunamadı.' };
+  const cacheKey = `${viewerId}:${targetId}`;
+  const cached = profileResultCache.get(cacheKey);
+  if (cached && cached.expires > Date.now()) return cached.data;
+
+  const [target, viewerSocial, targetSocial, myFriendIds, theirFriendIds, mutualServers] = await Promise.all([
+    findById(targetId),
+    getSocial(viewerId),
+    getSocial(targetId),
+    getFriendIds(viewerId),
+    getFriendIds(targetId),
+    getMutualServersLite(viewerId, targetId),
+  ]);
   if (!target) return { error: 'Kullanıcı bulunamadı.' };
-  const friends = await getFriends(viewerId);
-  const isFriend = friends.some((f) => f.id === targetId);
-  const s = await getSocial(viewerId);
-  const bs = await blockState(viewerId, targetId);
-  const myFriends = await getFriends(viewerId);
-  const theirFriends = await getFriends(targetId);
-  const theirSet = new Set(theirFriends.map((f) => f.id));
-  const mutualFriends = myFriends.filter((f) => theirSet.has(f.id)).map(publicUser);
 
-  const myServers = await getUserServers(viewerId);
-  const theirServers = await getUserServers(targetId);
-  const theirServerIds = new Set(theirServers.map((x) => x.id));
-  const mutualServers = myServers.filter((x) => theirServerIds.has(x.id)).map((x) => ({ id: x.id, name: x.name }));
+  const theirSet = new Set(theirFriendIds);
+  const mutualIds = myFriendIds.filter((id) => theirSet.has(id));
+  let mutualFriends = [];
+  if (mutualIds.length) {
+    const { data: profiles } = await supabase.from('profiles').select('*').in('id', mutualIds);
+    mutualFriends = (profiles || []).map((p) => publicUser(profileToUser(p)));
+  }
 
-  return {
+  const result = {
     user: { id: target.id, username: target.username, createdAt: target.createdAt },
-    isFriend,
-    friendSince: s.friendSince[targetId] || null,
-    note: s.notes[targetId] || '',
-    ignored: s.ignored.includes(targetId),
-    blocked: bs.blockedByMe,
+    isFriend: myFriendIds.some((id) => String(id) === String(targetId)),
+    friendSince: viewerSocial.friendSince[targetId] || null,
+    note: viewerSocial.notes[targetId] || '',
+    ignored: (viewerSocial.ignored || []).includes(targetId),
+    blocked: (viewerSocial.blocked || []).includes(targetId),
+    blockedByThem: (targetSocial.blocked || []).includes(viewerId),
     mutualFriends,
     mutualServers,
   };
+  profileResultCache.set(cacheKey, { data: result, expires: Date.now() + PROFILE_RESULT_TTL_MS });
+  return result;
 }
 
 export async function inviteToServer(inviterId, serverId, targetUserId) {

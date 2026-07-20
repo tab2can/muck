@@ -1439,20 +1439,32 @@ function openUserPopout(userId, rect) {
   const el = $('user-popout');
   if (!el) return;
   el.dataset.userId = String(userId);
-  $('up-avatar').textContent = '…';
-  $('up-name').textContent = 'Yükleniyor…';
-  $('up-handle').textContent = '';
-  $('up-mutuals').textContent = '';
-  $('up-msg-input').value = '';
-  placeUserPopout(rect || { left: 80, top: 80, right: 120, bottom: 120 });
+
+  // Anında önbellekten göster
+  const cached = profilePanelCache[userId];
+  if (cached?.user) {
+    profileTarget = cached;
+    renderUserPopout(cached);
+    placeUserPopout(rect || { left: 80, top: 80, right: 120, bottom: 120 });
+  } else {
+    $('up-avatar').textContent = '…';
+    $('up-name').textContent = 'Yükleniyor…';
+    $('up-handle').textContent = '';
+    $('up-mutuals').textContent = '';
+    $('up-msg-input').value = '';
+    placeUserPopout(rect || { left: 80, top: 80, right: 120, bottom: 120 });
+  }
 
   socket.emit('get-profile', { userId }, (res) => {
     if (res?.error) {
-      closeUserPopout();
-      toast(res.error);
+      if (!cached) {
+        closeUserPopout();
+        toast(res.error);
+      }
       return;
     }
     if (el.dataset.userId !== String(userId)) return;
+    profilePanelCache[userId] = res;
     profileTarget = res;
     renderUserPopout(res);
     placeUserPopout(rect || el.getBoundingClientRect());
@@ -3650,8 +3662,16 @@ function confirmRemoveFriend(friend) {
 
 function openUserProfile(userId) {
   if (!socket) return;
+  const cached = profilePanelCache[userId];
+  if (cached?.user) {
+    profileTarget = cached;
+    profileMutualTab = 'friends';
+    renderProfileModal();
+    $('profile-overlay')?.classList.remove('hidden');
+  }
   socket.emit('get-profile', { userId }, (res) => {
     if (res?.error) { toast(res.error); return; }
+    profilePanelCache[userId] = res;
     profileTarget = res;
     profileMutualTab = 'friends';
     renderProfileModal();
@@ -3950,6 +3970,29 @@ function connectSocket(token) {
     renderFriends();
     if (activeServer) renderMembers();
     if (activeView === 'dm' && activeDmFriendId === f.id) renderProfile();
+  });
+
+  // Supabase Realtime → sunucu fanout: yerel profil önbelleğini temizle / yenile
+  socket.on('profile-updated', ({ userId }) => {
+    if (!userId) return;
+    delete profilePanelCache[userId];
+    if (activeView === 'dm' && activeDmFriendId === userId) renderProfile();
+    if (profileTarget?.user?.id === userId) {
+      socket.emit('get-profile', { userId }, (res) => {
+        if (res?.error) return;
+        profilePanelCache[userId] = res;
+        profileTarget = res;
+        if (!$('profile-overlay')?.classList.contains('hidden')) renderProfileModal();
+        if (!$('user-popout')?.classList.contains('hidden') && $('user-popout')?.dataset.userId === String(userId)) {
+          renderUserPopout(res);
+        }
+      });
+    }
+  });
+
+  socket.on('social-invalidate', () => {
+    // Arkadaşlık / engel değişti — bir sonraki open'da taze profil
+    Object.keys(profilePanelCache).forEach((k) => delete profilePanelCache[k]);
   });
 
   socket.on('friend-requests', (payload) => {

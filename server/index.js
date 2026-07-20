@@ -8,6 +8,7 @@ import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import * as store from './store.js';
 import { supabaseAuth, publicAppUrl } from './supabase.js';
+import { startRealtime } from './realtime.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -1332,12 +1333,15 @@ io.on('connection', async (socket) => {
     cb?.(result);
   });
   socket.on('get-profile', async ({ userId: targetId }, cb) => {
-    const result = await store.getUserProfile(userId, targetId);
+    const [result, act] = await Promise.all([
+      store.getUserProfile(userId, targetId),
+      store.getDmActivity(userId, targetId).catch(() => null),
+    ]);
     if (result.error) return cb?.({ error: result.error });
     cb?.({
       ...result,
       online: isOnline(targetId),
-      dmChannelId: await store.getDmActivity(userId, targetId).dmChannelId,
+      dmChannelId: act?.dmChannelId || null,
     });
   });
   socket.on('invite-to-server', async ({ serverId, targetId }, cb) => {
@@ -1586,4 +1590,5 @@ io.on('connection', async (socket) => {
 const PORT = process.env.PORT || 3000;
 httpServer.listen(PORT, () => {
   console.log(`Muck çalışıyor: http://localhost:${PORT}`);
+  startRealtime({ io, onlineUsers });
 });
