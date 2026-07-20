@@ -7,7 +7,7 @@ import { supabase } from './supabase.js';
 
 const MAX_MESSAGES = 200;
 const MAX_GROUP_MEMBERS = 10;
-const PAGE_SIZE = 20;
+const PAGE_SIZE = 50;
 const EPOCH = 1420070400000;
 let lastTs = 0;
 let seq = 0;

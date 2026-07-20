@@ -910,7 +910,7 @@ io.on('connection', async (socket) => {
     socket.join(`chan:${channelId}`);
     socket.data.textChannelId = channelId;
     const [page, pinRes] = await Promise.all([
-      store.getMessages(channelId, { limit: 20 }),
+      store.getMessages(channelId),
       store.getChannelPins(userId, channelId),
     ]);
     cb?.({
@@ -924,7 +924,7 @@ io.on('connection', async (socket) => {
     const found = await store.findChannel(channelId);
     if (!found || !store.isMember(found.server, userId)) return cb?.({ error: 'Yetkiniz yok.' });
     if (found.channel.type !== 'text') return cb?.({ error: 'Metin kanalı değil.' });
-    const page = await store.getMessages(channelId, { limit: 20, beforeTs });
+    const page = await store.getMessages(channelId, { beforeTs });
     cb?.({ messages: page.messages, hasMore: page.hasMore });
   });
 
@@ -1026,7 +1026,7 @@ io.on('connection', async (socket) => {
     const [bs, pinRes, page, social, pubChannel] = await Promise.all([
       store.blockState(userId, friendId),
       store.getDmPins(userId, channel.id),
-      store.getDMs(userId, friendId, { limit: 20 }),
+      store.getDMs(userId, friendId),
       store.getSocial(userId),
       store.publicDmChannel(channel, userId),
       store.reopenDm(userId, friendId),
@@ -1066,7 +1066,7 @@ io.on('connection', async (socket) => {
     if (channel.type === 'group') {
       const [pinRes, page, social, pubChannel] = await Promise.all([
         store.getDmPins(userId, channel.id),
-        store.getDmChannelMessages(channel.id, { limit: 20 }),
+        store.getDmChannelMessages(channel.id),
         store.getSocial(userId),
         store.publicDmChannel(channel, userId),
         store.markGroupRead(userId, channel.id),
@@ -1095,7 +1095,7 @@ io.on('connection', async (socket) => {
     const [bs, pinRes, page, social] = await Promise.all([
       store.blockState(userId, friendId),
       store.getDmPins(userId, channel.id),
-      store.getDMs(userId, friendId, { limit: 20 }),
+      store.getDMs(userId, friendId),
       store.getSocial(userId),
       store.reopenDm(userId, friendId),
       store.markDmRead(userId, friendId),
@@ -1125,7 +1125,7 @@ io.on('connection', async (socket) => {
   socket.on('load-dm-messages', async ({ channelId, beforeTs }, cb) => {
     const channel = await store.getDMChannelById(channelId);
     if (!channel || !channel.users.includes(userId)) return cb?.({ error: 'Yetkiniz yok.' });
-    const page = await store.getDmChannelMessages(channelId, { limit: 20, beforeTs });
+    const page = await store.getDmChannelMessages(channelId, { beforeTs });
     cb?.({ messages: page.messages, hasMore: page.hasMore });
   });
 
