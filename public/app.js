@@ -1326,10 +1326,12 @@ function makeMsgEl(author, text, ts, msgId = null, extra = {}) {
       </div>`;
   }
   if (invite) bindServerInviteCard(div, invite);
-  bindDmAuthorContextMenu(div, extra);
+  bindMsgAuthorInteractions(div, extra);
   if (msgId && !extra.pending && ((activeView === 'dm' && activeDmChannelId) || (activeView === 'chat' && activeChannelId))) {
     div.dataset.allowMenu = '1';
     div.addEventListener('contextmenu', (e) => {
+      // Avatar / kullanıcı adına sağ tık → kullanıcı menüsü (mesaj menüsü değil)
+      if (e.target.closest('.msg-avatar, .msg-author')) return;
       e.preventDefault();
       e.stopPropagation();
       const channelId = activeView === 'chat' ? activeChannelId : activeDmChannelId;
@@ -1354,21 +1356,130 @@ function makeMsgEl(author, text, ts, msgId = null, extra = {}) {
   return div;
 }
 
-/** DM'de mesajdaki kullanıcı adı / avatara sağ tık → kanal menüsü */
-function bindDmAuthorContextMenu(msgEl, extra = {}) {
-  if (activeView !== 'dm' || activeGroupId || !activeDmFriendId) return;
+/** Mesajdaki avatar / kullanıcı adı: sol tık = mini profil, sağ tık = kullanıcı menüsü */
+function bindMsgAuthorInteractions(msgEl, extra = {}) {
   if (extra.metadata?.type === 'dm_call' || extra.compact) return;
   const authorId = extra.authorId || extra.fromId;
-  if (String(authorId) !== String(activeDmFriendId)) return;
-  const friend = friends.find((f) => f.id === activeDmFriendId);
-  if (!friend) return;
-  const open = (e) => {
+  if (!authorId) return;
+  const avatar = msgEl.querySelector('.msg-avatar');
+  const nameEl = msgEl.querySelector('.msg-author');
+  if (!avatar && !nameEl) return;
+
+  const onContext = (e) => {
     e.preventDefault();
     e.stopPropagation();
-    openDmContextMenu(e.clientX, e.clientY, friend);
+    openAuthorContextMenu(e.clientX, e.clientY, authorId);
   };
-  msgEl.querySelector('.msg-avatar')?.addEventListener('contextmenu', open);
-  msgEl.querySelector('.msg-author')?.addEventListener('contextmenu', open);
+  const onClick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const anchor = e.currentTarget;
+    openUserPopout(authorId, anchor.getBoundingClientRect());
+  };
+
+  for (const el of [avatar, nameEl]) {
+    if (!el) continue;
+    el.style.cursor = 'pointer';
+    el.addEventListener('contextmenu', onContext);
+    el.addEventListener('click', onClick);
+  }
+}
+
+function openAuthorContextMenu(x, y, authorId) {
+  closeUserPopout();
+  // DM sohbetinde karşı taraf → DM kanal menüsü
+  if (activeView === 'dm' && !activeGroupId && String(authorId) === String(activeDmFriendId)) {
+    const friend = friends.find((f) => f.id === activeDmFriendId);
+    if (friend) {
+      openDmContextMenu(x, y, friend);
+      return;
+    }
+  }
+  const friend = friends.find((f) => String(f.id) === String(authorId));
+  if (friend) {
+    openDmContextMenu(x, y, friend);
+    return;
+  }
+  // Arkadaş değilse genel kullanıcı menüsü
+  openFriendsListContextMenu(x, y, {
+    id: authorId,
+    username: friends.find((f) => f.id === authorId)?.username || 'Kullanıcı',
+    ignored: (social.ignored || []).includes(authorId),
+    blocked: (social.blocked || []).includes(authorId),
+  });
+}
+
+function closeUserPopout() {
+  const el = $('user-popout');
+  if (!el) return;
+  el.classList.add('hidden');
+  el.dataset.userId = '';
+}
+
+function placeUserPopout(rect) {
+  const el = $('user-popout');
+  if (!el) return;
+  el.classList.remove('hidden');
+  const pad = 8;
+  const w = el.offsetWidth || 300;
+  const h = el.offsetHeight || 220;
+  let left = rect.right + 10;
+  let top = rect.top;
+  if (left + w > window.innerWidth - pad) left = rect.left - w - 10;
+  if (left < pad) left = pad;
+  if (top + h > window.innerHeight - pad) top = window.innerHeight - h - pad;
+  if (top < pad) top = pad;
+  el.style.left = `${left}px`;
+  el.style.top = `${top}px`;
+}
+
+function openUserPopout(userId, rect) {
+  if (!socket || !userId) return;
+  closeCtxMenu();
+  const el = $('user-popout');
+  if (!el) return;
+  el.dataset.userId = String(userId);
+  $('up-avatar').textContent = '…';
+  $('up-name').textContent = 'Yükleniyor…';
+  $('up-handle').textContent = '';
+  $('up-mutuals').textContent = '';
+  $('up-msg-input').value = '';
+  placeUserPopout(rect || { left: 80, top: 80, right: 120, bottom: 120 });
+
+  socket.emit('get-profile', { userId }, (res) => {
+    if (res?.error) {
+      closeUserPopout();
+      toast(res.error);
+      return;
+    }
+    if (el.dataset.userId !== String(userId)) return;
+    profileTarget = res;
+    renderUserPopout(res);
+    placeUserPopout(rect || el.getBoundingClientRect());
+  });
+}
+
+function renderUserPopout(p) {
+  if (!p?.user) return;
+  const u = p.user;
+  $('up-avatar').textContent = initials(u.username);
+  $('up-name').textContent = u.username;
+  $('up-handle').textContent = u.username;
+  $('up-dot')?.classList.toggle('on', !!p.online);
+  const mf = p.mutualFriends?.length || 0;
+  const ms = p.mutualServers?.length || 0;
+  const mutuals = $('up-mutuals');
+  if (mutuals) {
+    mutuals.textContent = (mf || ms) ? `${mf} Ortak Arkadaş • ${ms} Ortak Sunucu` : '';
+  }
+  const input = $('up-msg-input');
+  if (input) {
+    input.placeholder = `@${u.username} kullanıcısına mesaj gönder`;
+    const isSelf = String(u.id) === String(currentUser?.id);
+    input.disabled = isSelf;
+    $('up-msg-form')?.classList.toggle('hidden', isSelf);
+  }
+  $('up-friend')?.classList.toggle('hidden', !p.isFriend && String(u.id) === String(currentUser?.id));
 }
 
 function fetchDmHeaderProfile(friendId) {
@@ -1628,6 +1739,7 @@ function confirmPendingMessage(container, realMsg, resolve) {
     const author = match.querySelector('.msg-author')?.textContent || '';
     const bodyText = match.querySelector('.msg-text')?.textContent || '';
     match.addEventListener('contextmenu', (e) => {
+      if (e.target.closest('.msg-avatar, .msg-author')) return;
       e.preventDefault();
       e.stopPropagation();
       const channelId = activeView === 'chat' ? activeChannelId : activeDmChannelId;
@@ -3551,6 +3663,7 @@ function closeUserProfile() {
   $('profile-overlay')?.classList.add('hidden');
   profileTarget = null;
   closeCtxMenu();
+  closeUserPopout();
 }
 
 function renderProfileModal() {
@@ -3703,12 +3816,54 @@ $('pm-note')?.addEventListener('input', () => {
   }, 400);
 });
 
-document.addEventListener('click', () => closeCtxMenu());
+document.addEventListener('click', (e) => {
+  closeCtxMenu();
+  if (!e.target.closest('#user-popout, .msg-avatar, .msg-author')) closeUserPopout();
+});
 $('ctx-menu')?.addEventListener('click', (e) => e.stopPropagation());
 $('ctx-menu')?.addEventListener('contextmenu', (e) => e.preventDefault());
+$('user-popout')?.addEventListener('click', (e) => e.stopPropagation());
+$('user-popout')?.addEventListener('contextmenu', (e) => e.preventDefault());
+$('up-more')?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (profileTarget?.user) openProfileMoreMenu(e.currentTarget);
+});
+$('up-friend')?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const id = profileTarget?.user?.id;
+  if (!id) return;
+  if (profileTarget?.isFriend) {
+    confirmRemoveFriend(profileTarget.user);
+    return;
+  }
+  openUserProfile(id);
+});
+$('up-mutuals')?.addEventListener('click', () => {
+  const id = profileTarget?.user?.id;
+  if (!id) return;
+  closeUserPopout();
+  openUserProfile(id);
+});
+$('up-msg-form')?.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const id = profileTarget?.user?.id;
+  const text = ($('up-msg-input')?.value || '').trim();
+  if (!id || !text) return;
+  closeUserPopout();
+  openDM(id);
+  // DM açıldıktan sonra kısa gecikmeyle metni yaz (composer hazır olsun)
+  setTimeout(() => {
+    const input = $('dm-input');
+    if (!input || input.disabled) return;
+    input.value = text;
+    input.focus();
+    $('dm-form')?.requestSubmit?.();
+  }, 250);
+});
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     closeCtxMenu();
+    closeUserPopout();
     if (!$('profile-overlay')?.classList.contains('hidden')) closeUserProfile();
   }
 });
