@@ -1,11 +1,10 @@
-/** Yerel önbellek — son 30 mesaj / profil (localStorage; HTTP çerezi boyutu yetmez) */
+/** Yerel önbellek — son 30 mesaj / profil (localStorage) */
 export const CACHE_MSG_LIMIT = 30;
 export const HISTORY_CHUNK = 30;
 /** 15., 45., 75. mesaj görününce (0-based: 14, 44, 74…) */
 export const HISTORY_TRIGGER_INDEX = 14;
 
 let userId = null;
-/** Bellek: hızlı erişim — splash'ta localStorage'dan doldurulur */
 const memMsgs = { dm: new Map(), chan: new Map() };
 const memProfiles = new Map();
 
@@ -15,6 +14,10 @@ function uidKey() {
 
 function msgKey(kind, channelId) {
   return `muck_cache_v2_${uidKey()}_msg_${kind}_${channelId}`;
+}
+
+function friendDmKey(friendId) {
+  return `muck_cache_v2_${uidKey()}_friend_dm_${friendId}`;
 }
 
 function profileKey(targetId) {
@@ -103,7 +106,23 @@ export function setCacheUser(id) {
   }
 }
 
-/** Splash — oturum açılmadan önce (son bilinen kullanıcı) */
+export function linkFriendToDmChannel(friendId, channelId) {
+  if (!friendId || !channelId) return;
+  writeJson(friendDmKey(friendId), { channelId: String(channelId), updatedAt: Date.now() });
+}
+
+export function getDmChannelForFriend(friendId) {
+  if (!friendId) return null;
+  const link = readJson(friendDmKey(friendId));
+  return link?.channelId || null;
+}
+
+export function getCachedDmByFriend(friendId) {
+  const channelId = getDmChannelForFriend(friendId);
+  if (!channelId) return { channelId: null, entry: null };
+  return { channelId, entry: getCachedMessages('dm', channelId) };
+}
+
 export function hydrateFromStorage(preloadUserId = null) {
   if (preloadUserId) userId = preloadUserId;
   else userId = localStorage.getItem('muck_cache_uid') || null;
@@ -134,6 +153,7 @@ export function hydrateFromStorage(preloadUserId = null) {
 }
 
 export function getCachedMessages(kind, channelId) {
+  if (!channelId) return null;
   const id = String(channelId);
   const mem = kind === 'dm' ? memMsgs.dm : memMsgs.chan;
   if (mem.has(id)) return mem.get(id);
@@ -142,7 +162,7 @@ export function getCachedMessages(kind, channelId) {
   return data;
 }
 
-export function saveMessages(kind, channelId, messages, hasMore = true) {
+export function saveMessages(kind, channelId, messages, hasMore = true, { friendId = null } = {}) {
   if (!channelId) return null;
   const trimmed = trimMsgs(messages);
   const meta = tailMeta(trimmed);
@@ -156,18 +176,19 @@ export function saveMessages(kind, channelId, messages, hasMore = true) {
   (kind === 'dm' ? memMsgs.dm : memMsgs.chan).set(id, entry);
   writeJson(msgKey(kind, id), entry);
   trackChannel(kind, id);
+  if (kind === 'dm' && friendId) linkFriendToDmChannel(friendId, id);
   return entry;
 }
 
-export function appendMessage(kind, channelId, msg) {
+export function appendMessage(kind, channelId, msg, { friendId = null } = {}) {
   if (!channelId || !msg?.id || String(msg.id).startsWith('local_')) return;
   const cur = getCachedMessages(kind, channelId);
   const list = cur?.messages || [];
   const id = String(msg.id);
   if (list.some((m) => String(m.id) === id)) {
-    return saveMessages(kind, channelId, list.map((m) => (String(m.id) === id ? { ...m, ...msg } : m)), cur?.hasMore);
+    return saveMessages(kind, channelId, list.map((m) => (String(m.id) === id ? { ...m, ...msg } : m)), cur?.hasMore, { friendId });
   }
-  return saveMessages(kind, channelId, [...list, msg], cur?.hasMore !== false);
+  return saveMessages(kind, channelId, [...list, msg], cur?.hasMore !== false, { friendId });
 }
 
 export function patchMessage(kind, channelId, messageId, patch) {
@@ -202,14 +223,12 @@ export function mergeMessageLists(cachedMsgs, serverMsgs) {
   return sortMsgs([...byId.values()]);
 }
 
-/** Sunucu snapshot cache'ten farklı mı */
 export function messagesNeedSync(cached, serverMsgs) {
   if (!serverMsgs?.length) return false;
   if (!cached?.messages?.length) return true;
   const serverTail = tailMeta(serverMsgs);
   if (cached.lastId && serverTail.lastId && cached.lastId !== serverTail.lastId) return true;
-  if (cached.lastTs && serverTail.lastTs && serverTail.lastTs > cached.lastTs) return true;
-  if (serverMsgs.length !== cached.messages.length) return true;
+  if (serverTail.lastTs > (cached.lastTs || 0)) return true;
   return false;
 }
 
@@ -250,43 +269,85 @@ export function listCachedChannels() {
   ];
 }
 
-/** Init sonrası — arka planda sunucu ile karşılaştır */
-export function syncAllWithServer(socket) {
-  if (!socket?.connected) return;
-  const channels = listCachedChannels();
-  for (const { kind, id } of channels) {
-    if (kind === 'dm') {
-      socket.emit('load-dm-messages', { channelId: id }, (res) => {
-        if (res?.error || !res?.messages) return;
-        const cached = getCachedMessages('dm', id);
-        if (messagesNeedSync(cached, res.messages)) {
-          const merged = mergeMessageLists(cached?.messages, res.messages);
-          saveMessages('dm', id, merged.slice(-CACHE_MSG_LIMIT), res.hasMore);
-        }
-      });
-    } else {
-      socket.emit('load-messages', { channelId: id }, (res) => {
-        if (res?.error || !res?.messages) return;
-        const cached = getCachedMessages('chan', id);
-        if (messagesNeedSync(cached, res.messages)) {
-          const merged = mergeMessageLists(cached?.messages, res.messages);
-          saveMessages('chan', id, merged.slice(-CACHE_MSG_LIMIT), res.hasMore);
-        }
-      });
+function emitOnce(socket, event, payload) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (val) => {
+      if (settled) return;
+      settled = true;
+      resolve(val);
+    };
+    socket.emit(event, payload, (res) => finish(res || {}));
+    setTimeout(() => finish({ error: 'timeout' }), 12000);
+  });
+}
+
+/**
+ * Splash — sunucu ile karşılaştır, güncelle, bitince resolve.
+ * Arayüz bu tamamlanmadan açılmamalı.
+ */
+export function syncAllWithServer(socket, { friends = [], groupDms = [], profileIds = [] } = {}) {
+  return new Promise((resolve) => {
+    if (!socket?.connected) {
+      resolve({ updated: 0, errors: 0 });
+      return;
     }
-  }
-  const idx = readIndex();
-  for (const pid of idx.profiles || []) {
-    socket.emit('get-profile', { userId: pid }, (res) => {
-      if (res?.error) return;
-      const prev = getCachedProfile(pid);
-      const prevTs = prev?.user?.updatedAt || prev?.user?.createdAt || 0;
-      const nextTs = res?.user?.createdAt || 0;
-      if (!prev || JSON.stringify(prev) !== JSON.stringify(res) || nextTs !== prevTs) {
-        saveProfile(pid, res);
-      }
+
+    const channelMap = new Map();
+    for (const { kind, id } of listCachedChannels()) {
+      channelMap.set(`${kind}:${id}`, { kind, id });
+    }
+    for (const f of friends) {
+      const cid = f?.dmChannelId || getDmChannelForFriend(f?.id);
+      if (cid) channelMap.set(`dm:${cid}`, { kind: 'dm', id: String(cid), friendId: f.id });
+    }
+    for (const g of groupDms || []) {
+      if (g?.id) channelMap.set(`dm:${g.id}`, { kind: 'dm', id: String(g.id) });
+    }
+
+    const profileSet = new Set(profileIds.map(String));
+    for (const f of friends) if (f?.id) profileSet.add(String(f.id));
+    readIndex().profiles?.forEach((id) => profileSet.add(String(id)));
+
+    const jobs = [];
+
+    for (const ch of channelMap.values()) {
+      jobs.push((async () => {
+        const res = ch.kind === 'dm'
+          ? await emitOnce(socket, 'load-dm-messages', { channelId: ch.id })
+          : await emitOnce(socket, 'load-messages', { channelId: ch.id });
+        if (res?.error || !res?.messages) return false;
+        const cached = getCachedMessages(ch.kind, ch.id);
+        if (messagesNeedSync(cached, res.messages)) {
+          const merged = mergeMessageLists(cached?.messages, res.messages);
+          saveMessages(ch.kind, ch.id, merged, res.hasMore, { friendId: ch.friendId || null });
+          return true;
+        }
+        return false;
+      })());
+    }
+
+    for (const pid of profileSet) {
+      jobs.push((async () => {
+        const res = await emitOnce(socket, 'get-profile', { userId: pid });
+        if (res?.error || !res?.user) return false;
+        const prev = getCachedProfile(pid);
+        if (!prev || JSON.stringify(prev) !== JSON.stringify(res)) {
+          saveProfile(pid, res);
+          return true;
+        }
+        return false;
+      })());
+    }
+
+    const maxWait = setTimeout(() => resolve({ updated: -1, errors: 0 }), 15000);
+
+    Promise.allSettled(jobs).then((results) => {
+      clearTimeout(maxWait);
+      const updated = results.filter((r) => r.status === 'fulfilled' && r.value === true).length;
+      resolve({ updated, errors: results.filter((r) => r.status === 'rejected').length });
     });
-  }
+  });
 }
 
 export function purgeLegacyCaches() {
