@@ -1,5 +1,5 @@
 /**
- * Realtime aboneliğini smoke-test eder.
+ * Realtime aboneliğini smoke-test eder (profiles + dm_messages + messages).
  * Kullanım: node scripts/check-realtime.mjs
  * Önce SQL Editor'da 006_realtime_publication.sql çalışmış olmalı.
  */
@@ -16,7 +16,7 @@ if (!url || !key) {
 
 const supabase = createClient(url, key, {
   auth: { autoRefreshToken: false, persistSession: false },
-  realtime: { params: { eventsPerSecond: 10 } },
+  realtime: { params: { eventsPerSecond: 20 } },
 });
 
 supabase.realtime.setAuth(key);
@@ -25,20 +25,27 @@ console.log('Realtime’a bağlanıyor…', url);
 
 const channel = supabase
   .channel('muck-realtime-check')
-  .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, (payload) => {
-    console.log('✓ profiles event:', payload.eventType, payload.new?.id || payload.old?.id);
+  .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => {
+    console.log('✓ profiles event');
+  })
+  .on('postgres_changes', { event: '*', schema: 'public', table: 'dm_messages' }, () => {
+    console.log('✓ dm_messages event');
+  })
+  .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, () => {
+    console.log('✓ messages event');
   })
   .subscribe((status, err) => {
     console.log('status:', status, err?.message || '');
     if (status === 'SUBSCRIBED') {
-      console.log('OK — Realtime çalışıyor. 8 sn sonra çıkılıyor.');
+      console.log('OK — Realtime kanalı açık (profiles, dm_messages, messages).');
+      console.log('Bir mesaj gönderirsen yukarıda event görürsün. 10 sn sonra çıkılıyor.');
       setTimeout(() => {
         supabase.removeChannel(channel);
         process.exit(0);
-      }, 8000);
+      }, 10000);
     }
     if (status === 'CHANNEL_ERROR') {
-      console.error('HATA — Tablolar publication’da mı? 006_realtime_publication.sql çalıştır.');
+      console.error('HATA — 006_realtime_publication.sql çalıştır.');
       process.exit(1);
     }
   });

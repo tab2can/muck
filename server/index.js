@@ -8,7 +8,7 @@ import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import * as store from './store.js';
 import { supabaseAuth, publicAppUrl } from './supabase.js';
-import { startRealtime } from './realtime.js';
+import { startRealtime, noteBroadcast } from './realtime.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -384,6 +384,7 @@ async function startDmCallLog(channel, fromId, fromUsername) {
   };
   dmCallLogs.set(channel.id, log);
   delete result._channel;
+  noteBroadcast(`dm:${result.id}`);
   emitDmMessage(channel, result, fromId, fromUsername);
   return log;
 }
@@ -410,6 +411,8 @@ async function endDmCallLog(channelId, reason = 'ended') {
   };
   const updated = await store.updateDmMessageMeta(channelId, log.messageId, metadata, text);
   if (updated.error) return null;
+  noteBroadcast(`dm-call-log:${log.messageId}`);
+  noteBroadcast(`dm-edit:${log.messageId}`);
   emitToChannelUsers(channel, 'dm-call-log', {
     channelId,
     message: updated,
@@ -937,6 +940,7 @@ io.on('connection', async (socket) => {
     try {
       const msg = await store.pushMessage(channelId, userId, socket.data.username, text, replyTo || null);
       cb?.({ success: true, message: msg });
+      noteBroadcast(`msg:${msg.id}`);
       socket.to(`chan:${channelId}`).emit('message', { channelId, message: msg });
     } catch (err) {
       cb?.({ error: err.message || 'Mesaj gönderilemedi.' });
@@ -951,6 +955,7 @@ io.on('connection', async (socket) => {
     const result = await store.pinChannelMessage(userId, channelId, messageId, pinned !== false);
     if (result.error) return cb?.({ error: result.error });
     cb?.(result);
+    noteBroadcast(`chan-pins:${channelId}`);
     io.to(`chan:${channelId}`).emit('channel-pins-updated', { channelId, pins: result.pins });
   });
 
@@ -962,6 +967,7 @@ io.on('connection', async (socket) => {
     const result = await store.reactChannelMessage(userId, channelId, messageId, emoji);
     if (result.error) return cb?.({ error: result.error });
     cb?.(result);
+    noteBroadcast(`msg-react:${result.messageId}`);
     io.to(`chan:${channelId}`).emit('channel-reaction', {
       channelId,
       messageId: result.messageId,
@@ -973,6 +979,7 @@ io.on('connection', async (socket) => {
     const result = await store.editChannelMessage(userId, channelId, messageId, text);
     if (result.error) return cb?.({ error: result.error });
     cb?.(result);
+    noteBroadcast(`msg-edit:${messageId}`);
     io.to(`chan:${channelId}`).emit('message-edited', { channelId, ...result });
   });
 
@@ -980,6 +987,7 @@ io.on('connection', async (socket) => {
     const result = await store.deleteChannelMessage(userId, channelId, messageId);
     if (result.error) return cb?.({ error: result.error });
     cb?.(result);
+    noteBroadcast(`msg-del:${messageId}`);
     io.to(`chan:${channelId}`).emit('message-deleted', { channelId, messageId });
   });
 
@@ -987,6 +995,7 @@ io.on('connection', async (socket) => {
     const result = await store.editDmMessage(userId, channelId, messageId, text);
     if (result.error) return cb?.({ error: result.error });
     cb?.(result);
+    noteBroadcast(`dm-edit:${messageId}`);
     const channel = await store.getDMChannelById(channelId);
     if (channel) emitToChannelUsers(channel, 'dm-edited', { channelId, ...result });
   });
@@ -995,6 +1004,7 @@ io.on('connection', async (socket) => {
     const result = await store.deleteDmMessage(userId, channelId, messageId);
     if (result.error) return cb?.({ error: result.error });
     cb?.(result);
+    noteBroadcast(`dm-del:${messageId}`);
     const channel = await store.getDMChannelById(channelId);
     if (channel) emitToChannelUsers(channel, 'dm-deleted', { channelId, messageId });
   });
@@ -1173,6 +1183,7 @@ io.on('connection', async (socket) => {
       if (!socket.data.dmChannelCache) socket.data.dmChannelCache = {};
       socket.data.dmChannelCache[ch.id] = ch;
       cb?.({ message: result });
+      noteBroadcast(`dm:${result.id}`);
       broadcastDmFast(ch, result);
       return;
     }
@@ -1190,6 +1201,7 @@ io.on('connection', async (socket) => {
     const ch = result._channel || channel;
     delete result._channel;
     cb?.({ message: result });
+    noteBroadcast(`dm:${result.id}`);
     broadcastDmFast(ch, result).catch(() => {});
   });
 
@@ -1254,6 +1266,7 @@ io.on('connection', async (socket) => {
     const result = await store.pinDmMessage(userId, channelId, messageId, pinned !== false);
     if (result.error) return cb?.({ error: result.error });
     cb?.(result);
+    noteBroadcast(`dm-pins:${channelId}`);
     const channel = await store.getDMChannelById(channelId);
     if (channel) emitToChannelUsers(channel, 'dm-pins-updated', { channelId, pins: result.pins });
   });
@@ -1266,6 +1279,7 @@ io.on('connection', async (socket) => {
     const result = await store.reactDmMessage(userId, channelId, messageId, emoji);
     if (result.error) return cb?.({ error: result.error });
     cb?.(result);
+    noteBroadcast(`dm-react:${result.messageId}`);
     const channel = await store.getDMChannelById(channelId);
     if (channel) {
       emitToChannelUsers(channel, 'dm-reaction', {
@@ -1366,6 +1380,7 @@ io.on('connection', async (socket) => {
       targetId,
       message,
     });
+    noteBroadcast(`dm:${message.id}`);
     for (const uid of channel.users) {
       if (uid === userId) continue;
       const sockets = onlineUsers.get(uid);
@@ -1590,5 +1605,5 @@ io.on('connection', async (socket) => {
 const PORT = process.env.PORT || 3000;
 httpServer.listen(PORT, () => {
   console.log(`Muck çalışıyor: http://localhost:${PORT}`);
-  startRealtime({ io, onlineUsers });
+  startRealtime({ io, onlineUsers, emitToChannelUsers });
 });
