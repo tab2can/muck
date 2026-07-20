@@ -13,9 +13,12 @@ export const supabaseAuth = createClient(url || '', publishableKey || '', {
   auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
 });
 
-/** Yüksek yetki — sunucu DB (secret, RLS bypass) */
+/** Yüksek yetki — sunucu DB + Realtime (secret, RLS bypass) */
 export const supabase = createClient(url || '', secretKey || '', {
   auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
+  realtime: {
+    params: { eventsPerSecond: 20 },
+  },
 });
 
 export function publicAppUrl() {
